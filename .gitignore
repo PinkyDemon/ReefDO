@@ -67,3 +67,17 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# ReefDO
+out/
+CMakeUserPresets.json
+.vs/
+*.profraw
+*.profdata
+
+# ESP-IDF (firmware/) — generated from sdkconfig.defaults and idf_component.yml
+firmware/build/
+firmware/managed_components/
+firmware/dependencies.lock
+firmware/sdkconfig
+firmware/sdkconfig.old
