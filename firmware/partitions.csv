@@ -1,0 +1,13 @@
+# ReefDO partition table for the 16 MB flash
+# The four log rings live on raw partitions (custom data subtypes): 40-byte programs, no filesystem.
+# Name,     Type, SubType,  Offset,   Size,     Flags
+nvs,        data, nvs,      0x9000,   0x10000,
+otadata,    data, ota,      0x19000,  0x2000,
+phy_init,   data, phy,      0x1B000,  0x1000,
+coredump,   data, coredump, 0x1C000,  0x10000,
+ota_0,      app,  ota_0,    0x30000,  0x300000,
+ota_1,      app,  ota_1,    0x330000, 0x300000,
+loga,       data, 0x40,     0x630000, 0x500000,
+logb,       data, 0x41,     0xB30000, 0x400000,
+loge,       data, 0x42,     0xF30000, 0x40000,
+logd,       data, 0x43,     0xF70000, 0x40000,

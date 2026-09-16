@@ -1,0 +1,751 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>reefdo</title>
+<style>
+:root{
+  --bg:#f3f4f6; --card:#ffffff; --text:#111827; --muted:#6b7280; --line:#e5e7eb; --soft:#f9fafb;
+  --green:#15803d; --blue:#2563eb; --yellow:#ca8a04; --red:#dc2626; --purple:#7e22ce; --cyan:#0e7490; --white:#9ca3af;
+  --green-bg:#dcfce7; --blue-bg:#dbeafe; --yellow-bg:#fef3c7; --red-bg:#fee2e2; --purple-bg:#f3e8ff; --cyan-bg:#cffafe;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root{ --bg:#0b0e13; --card:#151a22; --text:#e5e7eb; --muted:#9aa3ad; --line:#252c37; --soft:#1b212b;
+    --green:#4ade80; --blue:#60a5fa; --yellow:#fbbf24; --red:#f87171; --purple:#c084fc; --cyan:#22d3ee;
+    --green-bg:#0f2f1c; --blue-bg:#0f2140; --yellow-bg:#3a2a05; --red-bg:#3f1414; --purple-bg:#2a1442; --cyan-bg:#0a2e36; }
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+.tip{cursor:help;text-decoration:underline dotted var(--muted);text-underline-offset:3px}
+.simbadge{position:fixed;right:10px;bottom:10px;font:600 11px/1 var(--mono);letter-spacing:.1em;background:var(--yellow);color:#000;padding:5px 8px;border-radius:6px;opacity:.9;z-index:6}
+html,body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:inherit}
+button,input,select{font:inherit;color:inherit}
+header{position:sticky;top:0;z-index:5;background:var(--card);border-bottom:1px solid var(--line)}
+.bar{max-width:1040px;margin:0 auto;padding:10px 16px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.brand{font-weight:700;letter-spacing:.02em;font-size:17px}
+.brand small{color:var(--muted);font-weight:400;margin-left:6px}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-weight:600;font-size:13px;letter-spacing:.04em}
+.pill .dot{width:8px;height:8px;border-radius:50%;background:currentColor}
+.lv-normal{background:var(--green-bg);color:var(--green)}
+.lv-blue{background:var(--blue-bg);color:var(--blue)}
+.lv-yellow{background:var(--yellow-bg);color:var(--yellow)}
+.lv-red{background:var(--red-bg);color:var(--red)}
+.lv-fault{background:var(--purple-bg);color:var(--purple)}
+.lv-maint{background:var(--cyan-bg);color:var(--cyan)}
+.sys{margin-left:auto;display:flex;gap:14px;color:var(--muted);font-size:13px;font-family:var(--mono)}
+nav{max-width:1040px;margin:0 auto;padding:0 8px;display:flex;overflow-x:auto;scrollbar-width:none}
+nav::-webkit-scrollbar{display:none}
+nav a{padding:10px 12px;text-decoration:none;color:var(--muted);border-bottom:2px solid transparent;white-space:nowrap;font-weight:500}
+nav a.on{color:var(--text);border-color:var(--text)}
+main{max-width:1040px;margin:0 auto;padding:16px}
+section{display:none}
+section.on{display:block}
+.grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(230px,1fr))}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.card h3{margin:0 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600}
+.big{font-size:40px;font-weight:700;line-height:1.05;font-variant-numeric:tabular-nums}
+.big small{font-size:15px;color:var(--muted);font-weight:500;margin-left:4px}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:14px}
+.kv b{font-weight:500;color:var(--muted)}
+.kv span{font-variant-numeric:tabular-nums;text-align:right}
+.mono{font-family:var(--mono);font-size:13px}
+.muted{color:var(--muted)}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.btn{border:1px solid var(--line);background:var(--card);border-radius:8px;padding:8px 14px;cursor:pointer;font-weight:500}
+.btn:hover{background:var(--soft)}
+.btn.primary{background:var(--text);color:var(--bg);border-color:var(--text)}
+.btn.danger{color:var(--red);border-color:var(--red)}
+.btn[disabled]{opacity:.45;cursor:not-allowed}
+.devs{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}
+.dev{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--soft)}
+.dev .n{font-weight:600;display:flex;justify-content:space-between;align-items:center;gap:6px}
+.dev .st{font-family:var(--mono);font-size:12px;margin-top:6px;display:flex;justify-content:space-between;color:var(--muted)}
+.dev.on{border-color:var(--green);box-shadow:inset 0 0 0 1px var(--green)}
+.tag{font-size:11px;padding:1px 7px;border-radius:999px;font-weight:600;text-transform:uppercase;letter-spacing:.05em}
+.tag.blue{background:var(--blue-bg);color:var(--blue)} .tag.yellow{background:var(--yellow-bg);color:var(--yellow)}
+.tag.red{background:var(--red-bg);color:var(--red)} .tag.heat{background:var(--purple-bg);color:var(--purple)} .tag.none{background:var(--line);color:var(--muted)}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th{text-align:left;color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.06em;padding:8px 8px;border-bottom:1px solid var(--line)}
+td{padding:8px;border-bottom:1px solid var(--line);vertical-align:top;font-variant-numeric:tabular-nums}
+tr:last-child td{border-bottom:0}
+.ev{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:8px;vertical-align:middle}
+.chartwrap{position:relative}
+canvas{display:block;width:100%;border-radius:8px}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:8px}
+.legend i{display:inline-block;width:14px;height:3px;vertical-align:middle;margin-right:5px;border-radius:2px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{border:0;background:transparent;padding:6px 12px;cursor:pointer}
+.seg button.on{background:var(--text);color:var(--bg)}
+.readout{position:absolute;top:8px;right:8px;white-space:pre;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-family:var(--mono);font-size:12px;pointer-events:none;display:none}
+.form{display:grid;gap:10px 16px;grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
+label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted)}
+label.f input,label.f select{padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:var(--soft);font-size:14px;color:var(--text)}
+label.c{display:flex;align-items:center;gap:8px;font-size:14px}
+td input:not([type=checkbox]),td select{padding:5px 7px;border:1px solid var(--line);border-radius:6px;background:var(--soft);color:var(--text);font-size:13px}
+.note{font-size:13px;color:var(--muted);margin-top:6px}
+.warn{border-left:3px solid var(--yellow);padding:8px 12px;background:var(--yellow-bg);color:var(--text);border-radius:6px;font-size:14px}
+.ok{border-left:3px solid var(--green);padding:8px 12px;background:var(--green-bg);color:var(--text);border-radius:6px;font-size:14px}
+.prog{height:8px;background:var(--line);border-radius:999px;overflow:hidden;margin-top:10px}
+.prog i{display:block;height:100%;width:0;background:var(--blue);transition:width .3s}
+.spark{width:100%;height:70px}
+.toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:var(--text);color:var(--bg);padding:9px 16px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none}
+.toast.on{opacity:1}
+h2{font-size:16px;margin:18px 0 10px}
+.stack>*+*{margin-top:12px}
+@media (max-width:600px){ .big{font-size:34px} .sys{display:none} main{padding:12px} }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="bar">
+    <div class="brand">reefdo<small id="fw"></small></div>
+    <span id="levelpill" class="pill lv-normal"><span class="dot"></span>…</span>
+    <div class="sys">
+      <span id="wifi" title="WiFi">📶</span>
+      <span id="tsrc" title="Time source">🕒</span>
+      <span id="clock"></span>
+      <button class="btn" id="lock" style="padding:2px 8px" onclick="toggleLogin()" title="sign in for changes">🔒</button>
+    </div>
+    <div class="row" id="login" hidden><input type="password" id="login-pw" placeholder="password (default reefdo)" style="padding:6px 9px;border:1px solid var(--line);border-radius:8px;background:var(--soft);color:var(--text)"><button class="btn primary" onclick="signIn()">Sign in</button><span class="muted" style="font-size:13px" id="login-msg">user reef · needed for changes only</span></div>
+  </div>
+  <nav id="nav">
+    <a href="#status" class="on">Status</a><a href="#chart">Chart</a><a href="#events">Events</a>
+    <a href="#service">Service</a><a href="#config">Config</a><a href="#maint">Maintenance</a>
+    <a href="#export">Export</a><a href="#setup">Setup</a>
+  </nav>
+</header>
+
+<main>
+
+<section id="status" class="on">
+  <div class="warn" id="cfgwarn" hidden style="margin-bottom:12px"></div>
+  <div class="grid">
+    <div class="card">
+      <h3>Dissolved oxygen</h3>
+      <div class="big" id="do-big">—<small>mg/L</small></div>
+      <div class="kv" style="margin-top:8px">
+        <b>saturation</b><span id="do-sat">—</span>
+        <b>correction</b><span class="muted" id="do-corr">—</span>
+        <b>slope</b><span id="do-slope">—</span>
+        <b>probe</b><span class="mono" id="do-probe">—</span>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Temperature</h3>
+      <div class="big" id="temp-big">—<small>°C</small></div>
+      <div class="kv" style="margin-top:8px">
+        <b>heat trigger</b><span id="heat-th">—</span>
+        <b>heat</b><span id="heat-st">—</span>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Level</h3>
+      <div class="row" style="margin:2px 0 8px"><span id="levelpill2" class="pill lv-normal" style="font-size:15px"><span class="dot"></span>…</span></div>
+      <div class="kv">
+        <b>Blue enters</b><span id="th-blue">—</span>
+        <b>Yellow enters</b><span id="th-yellow">—</span>
+        <b>Red enters</b><span id="th-red">—</span>
+        <b>night lock</b><span class="muted" id="nightlock">—</span>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn" id="ackbtn" onclick="ack()">Acknowledge</button>
+        <span class="muted" style="font-size:13px" id="acknote"></span>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Tonight</h3>
+      <div class="kv">
+        <b>service window</b><span id="svc-window">—</span>
+        <b>service</b><span id="svc-state">—</span>
+        <b>last check</b><span id="svc-last">—</span>
+      </div>
+    </div>
+  </div>
+
+  <h2>Devices</h2>
+  <div class="devs" id="devs"></div>
+
+  <h2>System</h2>
+  <div class="card">
+    <div class="kv" style="grid-template-columns:auto 1fr auto 1fr">
+      <b>uptime</b><span id="sys-up">—</span>  <b>firmware</b><span id="sys-fw">—</span>
+      <b>WiFi</b><span id="sys-wifi">—</span> <b>time</b><span id="sys-time">—</span>
+      <b>log A</b><span id="sys-loga">—</span> <b>log B / E / D</b><span id="sys-logb">—</span>
+      <b>next seq</b><span class="mono" id="sys-seq">—</span> <b>push</b><span id="sys-push">—</span>
+    </div>
+  </div>
+</section>
+
+<section id="chart">
+  <div class="card">
+    <div class="row" style="justify-content:space-between">
+      <div class="seg" id="range"><button data-r="1h">1 h</button><button class="on" data-r="24h">24 h</button><button data-r="7d">7 d</button><button data-r="90d">90 d</button></div>
+      <label class="c"><input type="checkbox" id="showtemp"> temperature</label>
+    </div>
+    <div class="chartwrap" style="margin-top:10px">
+      <canvas id="cv" height="360"></canvas>
+      <div class="readout" id="readout"></div>
+    </div>
+    <div class="legend" id="legend"></div>
+    <div class="note">1 h: every 10-s sample, 24 h: every third one (tier A). 7 d / 90 d: 5-minute min–max band and average (tier B). Thresholds are drawn with their hysteresis bands.</div>
+  </div>
+</section>
+
+<section id="events">
+  <div class="card">
+    <div class="row" style="margin-bottom:8px">
+      <span class="muted" style="font-size:13px">newest first · <span id="evcount"></span></span>
+      <button class="btn" style="margin-left:auto;padding:4px 10px" onclick="loadEvents()">Refresh</button>
+    </div>
+    <table id="evtable"><thead><tr><th>time</th><th>event</th><th>value</th></tr></thead><tbody></tbody></table>
+  </div>
+</section>
+
+<section id="service">
+  <div class="grid">
+    <div class="card">
+      <h3>Window</h3>
+      <div class="big" style="font-size:28px" id="svc-win2">—</div>
+      <div class="note" id="svc-note"></div>
+      <div class="row" style="margin-top:10px"><button class="btn primary" onclick="cmd({service:'run'},'Service run requested')">Run now</button><span class="muted" style="font-size:13px" id="svc-dur"></span></div>
+    </div>
+    <div class="card">
+      <h3>Last outcome per device</h3>
+      <table id="svctable"><tbody></tbody></table>
+    </div>
+  </div>
+  <h2>Run history</h2>
+  <div class="card"><table id="svchist"><thead><tr><th>time</th><th>event</th><th>device</th><th>response</th><th>outcome</th></tr></thead><tbody></tbody></table></div>
+</section>
+
+<section id="config" class="stack">
+  <div class="card">
+    <h3>Levels · mg/L with hysteresis</h3>
+    <table>
+      <thead><tr><th>level</th><th data-tip="levels.*.mgl">threshold</th><th data-tip="levels.*.hysteresis">± hysteresis</th><th data-tip="levels.*.dwell_s">dwell (s)</th><th>enters below</th><th>leaves above</th></tr></thead>
+      <tbody id="lvcfg"></tbody>
+    </table>
+    <div class="form" style="margin-top:10px">
+      <label class="f">recover: above "leaves" for (s) <input data-k="recover_sustain_s"></label>
+      <label class="f">Blue slope trigger, mg/L per 10 min (0 = off) <input data-k="levels.blue.slope_mgl_per_10min"></label>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Devices</h3>
+    <div style="overflow-x:auto"><table>
+      <thead><tr><th>#</th><th data-tip="devices.*.name">name</th><th data-tip="devices.*.wired">wired</th><th data-tip="devices.*.trigger">trigger</th><th data-tip="devices.*.mode">mode</th><th data-tip="devices.*.ack_silences">ack silences</th><th data-tip="devices.*.service_s">service (s)</th><th data-tip="devices.*.min_response_pct">min response (%)</th></tr></thead>
+      <tbody id="devcfg"></tbody>
+    </table></div>
+    <div class="note">NC = on when the coil is de-energised = on when the controller is dead. <code>pulse_off</code> requires NC. Service = seconds the device runs in the daily check (0 = not exercised). Min response in % saturation (0 = run but don't judge).</div>
+  </div>
+
+  <div class="card">
+    <h3>Service run</h3>
+    <div class="form">
+      <label class="f">window start <input type="time" data-k="service.window.0"></label>
+      <label class="f">window end (≤ night start) <input type="time" data-k="service.window.1"></label>
+      <label class="f">settle between devices (s) <input data-k="service.settle_s"></label>
+      <label class="f">tail after switch-off (s) <input data-k="service.tail_s"></label>
+      <label class="f">min headroom from 100 % (%) <input data-k="service.min_headroom_pct"></label>
+      <label class="f">inconclusive days before alert <input data-k="service.inconclusive_days"></label>
+      <label class="f">induce deficit (s, 0 = off) <input data-k="service.induce_deficit_s"></label>
+      <label class="f">induce deficit device <input data-k="service.induce_deficit_device"></label>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <label class="c"><input type="checkbox" data-k="escalate_if_failed"> escalate one level deeper if a device failed its check</label>
+      <label class="c"><input type="checkbox" data-k="service.chirp"> chirp at start</label>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card"><h3>Night</h3>
+      <div class="form"><label class="f">start <input type="time" data-k="night.start"></label><label class="f">end <input type="time" data-k="night.end"></label></div>
+      <div class="row" style="margin-top:8px"><label class="c"><input type="checkbox" data-k="night.lock"> night lock (hold ≥ Blue until morning once triggered)</label></div>
+      <div class="row"><label class="c"><input type="checkbox" data-k="night.unknown_time_is_night"> unknown clock counts as night</label></div>
+    </div>
+    <div class="card"><h3>Heat</h3>
+      <div class="form"><label class="f">on above (°C) <input data-k="heat.on_c"></label><label class="f">off below (°C) <input data-k="heat.off_c"></label></div>
+    </div>
+    <div class="card"><h3>Probe &amp; fault</h3>
+      <div class="form">
+        <label class="f">sample period (s) <input data-k="sample_period_s"></label>
+        <label class="f">failures before FAULT <input data-k="fault.consecutive_failures"></label>
+        <label class="f">stuck after (min) <input data-k="fault.stuck_minutes"></label>
+        <label class="f">FAULT acts as <select data-k="fault.level"><option>yellow</option><option>red</option></select></label>
+        <label class="f">correction scale <input data-k="correction.scale"></label>
+        <label class="f">correction offset (mg/L) <input data-k="correction.offset"></label>
+        <label class="f">salinity (psu, for the hint) <input data-k="salinity_psu"></label>
+      </div>
+      <div class="row" style="margin-top:8px"><label class="c"><input type="checkbox" data-k="fault.alert"> alert on sensor failure (FAULT)</label></div>
+      <div class="note">Every value shown or logged is <code>probe × scale + offset</code>; 1 / 0 is the factory value. Seawater hint for this salinity and temperature: <b id="scalehint">—</b>.</div>
+    </div>
+    <div class="card"><h3>Alarm</h3>
+      <div class="form">
+        <label class="f">ack silence (s) <input data-k="ack_silence_s"></label>
+        <label class="f">pulse-off duration (s) <input data-k="pulse.s"></label>
+        <label class="f">pulse min interval (s) <input data-k="pulse.min_interval_s"></label>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Signals · buzzer per state</h3>
+    <table><thead><tr><th>state</th><th data-tip="signals.*.buzzer">buzzer</th><th data-tip="signals.*.volume">volume</th></tr></thead><tbody id="sigcfg"></tbody></table>
+    <div class="form" style="margin-top:10px">
+      <label class="f">buzzer tone (Hz) <input data-k="signals.buzzer_hz"></label>
+      <label class="f">LED brightness (%) <input data-k="signals.led_brightness"></label>
+    </div>
+    <div class="note">Normal is silent; ack and maintenance mute everything. LED codes are fixed: green steady = OK online, green 0.5 Hz = OK offline, blue 1 Hz / yellow 2 Hz / red 4 Hz = alert, purple 2 Hz = FAULT, cyan = maintenance, white pulse = service run.</div>
+  </div>
+
+  <div class="card">
+    <h3>Buzzer tester</h3>
+    <div class="form">
+      <label class="f" title="Pattern to try">pattern <select id="bt-pattern"><option>chirp</option><option selected>beep</option><option>double</option><option>triple</option><option>continuous</option></select></label>
+      <label class="f" title="0 = silent, 3 = loudest">volume <select id="bt-volume"><option>1</option><option selected>2</option><option>3</option></select></label>
+      <label class="f" title="Frequency of the tone">tone (Hz) <input id="bt-hz" value="2400"></label>
+      <label class="f" title="How long to play">seconds <input id="bt-s" value="4"></label>
+    </div>
+    <div class="row" style="margin-top:10px"><button class="btn" onclick="buzzerTest()">Play</button><span class="note" style="margin:0">Plays even while the buzzer is muted. Pick what you like, then set it per state above.</span></div>
+  </div>
+
+  <div class="card">
+    <h3>Push · ntfy</h3>
+    <div class="row"><label class="c"><input type="checkbox" data-k="ntfy.enabled"> enabled</label></div>
+    <div class="form" style="margin-top:8px"><label class="f">topic <input data-k="ntfy.topic" placeholder="random-32-char-topic"></label><label class="f">push from <select data-k="ntfy.min_level"><option>blue</option><option>yellow</option><option>red</option></select></label></div>
+    <div class="row" style="margin-top:8px"><button class="btn" onclick="ntfyTest()">Send test</button><span class="note" style="margin:0">One HTTPS POST per event. Nothing here is needed for the ladder.</span></div>
+  </div>
+
+  <div class="card">
+    <div id="cfgmsg" class="note"></div>
+    <div class="row" style="margin-top:10px"><button class="btn primary" onclick="saveConfig()">Save</button><button class="btn" onclick="loadConfig()">Revert</button><button class="btn" onclick="downloadConfig()">Download JSON</button></div>
+  </div>
+</section>
+
+<section id="maint" class="stack">
+  <div class="card">
+    <div class="row" style="justify-content:space-between">
+      <div><h3 style="margin-bottom:2px">Maintenance mode</h3><div class="note" style="margin:0">Mutes the buzzer and enables the tests below for 30 min. The ladder keeps running; level-driven devices still win.</div></div>
+      <button class="btn" id="maintbtn" onclick="toggleMaint()">Enter maintenance</button>
+    </div>
+  </div>
+  <div class="grid">
+    <div class="card"><h3>Relay test</h3>
+      <div class="devs" id="relaytest"></div>
+      <div class="note">Forces the device on for 5 s, then back to automatic. Check the device — and the multimeter on COM/NO/NC the first time.</div>
+    </div>
+    <div class="card"><h3>Air calibration</h3>
+      <div class="note" style="margin:0 0 8px">Probe in water-saturated air (sealed cup over a wet sponge, not touching water), shaded, 180 s to settle.</div>
+      <button class="btn maint-only" disabled onclick="cmd({cal:'air'},'Air calibration requested')">Calibrate now</button>
+    </div>
+    <div class="card"><h3>Firmware update</h3>
+      <input type="file" accept=".bin" class="maint-only" disabled id="otafile">
+      <div class="prog"><i id="otaprog"></i></div>
+      <div class="row" style="margin-top:8px"><button class="btn maint-only" disabled onclick="ota()">Upload &amp; reboot</button><span class="muted" style="font-size:13px">rollback armed until the new image proves itself</span></div>
+    </div>
+  </div>
+</section>
+
+<section id="export">
+  <div class="grid">
+    <div class="card"><h3>Full resolution · tier A</h3>
+      <div class="note" style="margin:0 0 10px">Every sample and every event, one CSV. This browser last exported up to seq <b class="mono" id="lastseq">—</b>.</div>
+      <div class="row"><button class="btn primary" onclick="exportSince()">Download since last export</button><button class="btn" onclick="exportAll()">Download all</button></div>
+    </div>
+    <div class="card"><h3>Aggregates · tier B</h3>
+      <div class="note" style="margin:0 0 10px">5-min min / avg / max, all of it.</div>
+      <div class="row"><a class="btn" href="/api/series?tier=B" download="reefdo-5min.csv">Download CSV</a></div>
+    </div>
+    <div class="card"><h3>Events</h3>
+      <div class="row"><a class="btn" href="/api/events" download="reefdo-events.csv">Events CSV</a></div>
+    </div>
+    <div class="card"><h3>Without a browser</h3>
+      <div class="mono" style="white-space:pre;overflow-x:auto;padding:8px;background:var(--soft);border-radius:8px">curl "http://reefdo.local/api/export.csv?since=0" -o reefdo.csv</div>
+    </div>
+  </div>
+</section>
+
+<section id="setup" class="stack">
+  <div class="grid">
+    <div class="card"><h3>WiFi</h3>
+      <div class="kv" style="margin-bottom:8px"><b>state</b><span id="wifi-state">—</span></div>
+      <div class="form"><label class="f">network <input id="wifi-ssid"></label><label class="f">password <input type="password" id="wifi-pass"></label></div>
+      <div class="row" style="margin-top:8px"><button class="btn primary" onclick="saveWifi()">Save &amp; connect</button></div>
+      <div class="note">If the router is unreachable for 2 min the board raises its own open network <b>reefdo-setup</b>; this page is at http://192.168.4.1/ there.</div>
+    </div>
+    <div class="card"><h3>Web password</h3>
+      <div class="form"><label class="f">user <input value="reef" disabled></label><label class="f">new password <input type="password" id="pw-new"></label></div>
+      <div class="row" style="margin-top:8px"><button class="btn" onclick="savePassword()">Change</button></div>
+      <div class="note">Forgot it? <code>passwd reset</code> on the USB console restores <code>reefdo</code>.</div>
+    </div>
+    <div class="card"><h3>Time</h3>
+      <div class="kv"><b>board clock</b><span id="time-state">—</span><b>this browser</b><span id="time-here">—</span></div>
+      <div class="row" style="margin-top:8px"><button class="btn" onclick="pushTime()">Set from this browser now</button></div>
+      <div class="note">Pushed automatically when the board's clock is unknown. NTP takes over whenever the internet is reachable.</div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<div class="toast" id="toast"></div>
+<div class="simbadge" id="simbadge" hidden>SIMULATED TANK · NO SENSOR</div>
+<script>
+// ---------- helpers ----------
+const $=id=>document.getElementById(id);
+let AUTH=localStorage.getItem('auth')||'';
+async function api(p,o){ o=o||{}; if(AUTH){ o.headers=Object.assign({},o.headers,{Authorization:'Basic '+AUTH}); } const r=await fetch(p,o); if(r.status===401){ $('lock').textContent='🔒'; showLogin(AUTH?'wrong password':'sign in to make changes'); throw new Error('not signed in'); } if(!r.ok) throw new Error(r.status+' '+(await r.text()).slice(0,120)); return r; }
+function showLogin(msg){ $('login').hidden=false; $('login-msg').textContent=msg; $('login-pw').focus(); }
+function toggleLogin(){ $('login').hidden=!$('login').hidden; }
+async function signIn(){ AUTH=btoa('reef:'+$('login-pw').value); try{ await getJ('/api/auth'); localStorage.setItem('auth',AUTH); $('login').hidden=true; $('lock').textContent='🔓'; $('login-pw').value=''; toast('Signed in'); }catch(e){ AUTH=''; localStorage.removeItem('auth'); $('lock').textContent='🔒'; showLogin('wrong password'); } }
+const getJ=p=>api(p).then(r=>r.json());
+const sendJ=(p,b,m='POST')=>api(p,{method:m,headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).then(r=>r.json());
+const sendForm=(p,b)=>api(p,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(b)}).then(r=>r.json());
+let tt; function toast(m){ const t=$('toast'); t.textContent=m; t.classList.add('on'); clearTimeout(tt); tt=setTimeout(()=>t.classList.remove('on'),2600); }
+function csv(text){ const lines=text.trim().split('\n'); if(lines.length<2) return []; const k=lines[0].split(','); return lines.slice(1).map(l=>{ const v=l.split(','); const o={}; k.forEach((x,i)=>o[x]=+v[i]); return o; }); }
+const pad=n=>String(n).padStart(2,'0');
+const fmtTime=ts=>ts? new Date(ts*1000).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}) : '';
+const fmtUp=s=>{ const d=Math.floor(s/86400), h=Math.floor(s%86400/3600), m=Math.floor(s%3600/60); return (d?d+' d ':'')+h+' h '+m+' m'; };
+const LEVEL=['normal','blue','yellow','red'];
+const css=v=>getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const tzHere=()=>-new Date().getTimezoneOffset()*60;
+async function cmd(body,msg){ try{ const r=await sendJ('/api/cmd',body); toast(r.ok?(msg||'ok'):'Refused: '+r.message); refresh(); }catch(e){ toast('Failed: '+e.message); } }
+
+// ---------- tabs ----------
+const nav=$('nav');
+function show(id){
+  document.querySelectorAll('section').forEach(s=>s.classList.toggle('on',s.id===id));
+  nav.querySelectorAll('a').forEach(a=>a.classList.toggle('on',a.getAttribute('href')==='#'+id));
+  if(id==='chart') drawChart();
+  if(id==='events') loadEvents();
+  if(id==='service') loadService();
+  if(id==='config') loadConfig();
+  if(id==='setup') loadSetup();
+  if(id==='export') $('lastseq').textContent=localStorage.getItem('lastseq')||'0';
+}
+nav.addEventListener('click',e=>{ if(e.target.tagName==='A'){ e.preventDefault(); history.replaceState(null,'',e.target.getAttribute('href')); show(e.target.getAttribute('href').slice(1)); }});
+
+// ---------- status ----------
+let ST=null, CFG=null, WIFI=null;
+function pill(el,s){
+  const maint=s.ladder.maintenance, fault=s.ladder.fault, lv=s.ladder.effective;
+  el.className='pill '+(maint?'lv-maint':fault?'lv-fault':'lv-'+lv);
+  el.innerHTML='<span class="dot"></span>'+(maint?'MAINTENANCE':fault?'FAULT':lv.toUpperCase())+(s.ladder.silenced?' · silenced':'');
+}
+function devCard(d,i){
+  const state=d.pulse?(d.on?'RUNNING':'PULSED OFF'):(d.on?'ON':'off');
+  return `<div class="dev ${d.on?'on':''}"><div class="n"><span>${i+1} · ${d.name}</span><span class="tag ${d.trigger}">${d.trigger}</span></div>
+    <div class="st"><span>${state}${d.pulse?' · pulse':''}</span><span>${d.wired}${d.energised?' · coil on':''}</span></div>
+    <div class="st"><span>${d.failed?'<b style="color:var(--red)">service FAIL</b>':(d.service_s?'service '+d.service_s+' s':'not exercised')}</span></div></div>`;
+}
+async function refresh(){
+  try{ ST=await getJ('/api/status'); }catch(e){ $('do-probe').textContent='no answer: '+e.message; return; }
+  const s=ST, p=s.probe, l=s.ladder;
+  $('fw').textContent='fw '+s.fw;
+  pill($('levelpill'),s); pill($('levelpill2'),s);
+  $('do-big').innerHTML=(p.do==null?'—':p.do.toFixed(2))+'<small>mg/L</small>';
+  $('do-sat').textContent=p.sat==null?'—':p.sat.toFixed(1)+' %';
+  $('do-corr').textContent='×'+s.correction.scale.toFixed(3)+' '+(s.correction.offset>=0?'+':'')+s.correction.offset.toFixed(2)+(s.correction.factory?' · factory':'');
+  $('do-slope').textContent=(p.slope>=0?'+':'')+p.slope.toFixed(2)+' mg/L / 10 min';
+  $('do-probe').textContent=p.status+(p.failures?' · '+p.failures+' failures':'');
+  $('temp-big').innerHTML=(p.temp==null?'—':p.temp.toFixed(1))+'<small>°C</small>';
+  $('heat-st').textContent=l.heat?'ON':'off';
+  $('th-blue').textContent='< '+l.enters_below.blue.toFixed(2)+' · leaves > '+l.leaves_above.blue.toFixed(2);
+  $('th-yellow').textContent='< '+l.enters_below.yellow.toFixed(2)+' · leaves > '+l.leaves_above.yellow.toFixed(2);
+  $('th-red').textContent='< '+l.enters_below.red.toFixed(2)+' · leaves > '+l.leaves_above.red.toFixed(2);
+  const alarm=l.effective!=='normal'||l.fault;
+  $('ackbtn').disabled=!alarm||l.silenced; $('acknote').textContent=alarm?(l.silenced?'silenced':'silences the buzzer and ack devices for a while; the level stays'):'nothing to acknowledge';
+  $('svc-window').textContent=s.service.window_start+' – '+s.service.window_end;
+  $('svc-state').textContent=s.service.running?('running · device '+s.service.device+' · '+s.service.phase):'idle'+(s.service.inconclusive_alert?' · inconclusive streak':'');
+  $('devs').innerHTML=s.devices.map(devCard).join('');
+  $('sys-up').textContent=fmtUp(s.uptime_s); $('sys-fw').textContent=s.fw+(WIFI&&WIFI.partition?' · '+WIFI.partition+' · '+WIFI.image:'');
+  $('sys-time').textContent=s.clock_known?fmtTime(s.unix)+' (tz '+(s.tz/3600)+' h)':'unknown';
+  $('sys-loga').textContent=s.log.a+' / '+s.log.a_capacity+' records';
+  $('sys-logb').textContent=s.log.b+' / '+s.log.e+' / '+s.log.d;
+  $('sys-seq').textContent=s.next_seq;
+  $('clock').textContent=s.clock_known?new Date(s.unix*1000).toLocaleString('en-GB',{weekday:'short',hour:'2-digit',minute:'2-digit'}):'clock unknown';
+  $('tsrc').textContent='🕒 '+(s.clock_known?(WIFI&&WIFI.ntp?'NTP':'set'):'—');
+  const maint=l.maintenance;
+  document.querySelectorAll('.maint-only').forEach(b=>b.disabled=!maint);
+  $('maintbtn').textContent=maint?'Leave maintenance':'Enter maintenance';
+  if(!window._pushedTime && (!s.clock_known || (AUTH && s.tz!==tzHere()))){ window._pushedTime=true; pushTime(true); }
+  if(CFG){ $('heat-th').textContent=CFG.heat.on_c+' on / '+CFG.heat.off_c+' off'; $('nightlock').textContent=CFG.night.lock?'on · '+CFG.night.start+'–'+CFG.night.end:'off'; }
+}
+async function refreshWifi(){
+  try{ WIFI=await getJ('/api/sys'); }catch(e){ return; }
+  const w=WIFI;
+  $('wifi').textContent='📶 '+(w.connected?w.rssi+' dBm':w.ap?'setup AP':'—');
+  $('sys-wifi').textContent=w.connected?w.ssid+' · '+w.rssi+' dBm · '+w.ip:(w.ap?'setup AP reefdo-setup (192.168.4.1)':'connecting to '+w.ssid);
+  $('simbadge').hidden=w.probe!=='sim';
+  $('cfgwarn').hidden=!w.config||w.config==='stored'; $('cfgwarn').textContent=w.config==='defaults'?'Factory defaults are active: no device is assigned yet. Set the devices on the Config page and Save.':'The stored configuration was '+w.config+' — the board runs on factory defaults until you Save a valid one.';
+  $('sys-push').textContent=CFG&&CFG.ntfy.enabled?('sent '+w.ntfy_sent+' · failed '+w.ntfy_failed):'off';
+}
+function ack(){ cmd({ack:true},'Acknowledged'); }
+async function toggleMaint(){ const on=!(ST&&ST.ladder.maintenance); await cmd({maintenance:on},on?'Maintenance mode for 30 min — buzzer muted':'Back to normal operation'); }
+async function pushTime(quiet){ try{ await sendJ('/api/cmd',{time:{unix:Math.floor(Date.now()/1000),tz:tzHere()}}); if(!quiet) toast('Board clock set from this browser'); refresh(); }catch(e){ if(!quiet) toast('Failed: '+e.message); } }
+
+// ---------- chart ----------
+let range='24h';
+$('range').addEventListener('click',e=>{ if(e.target.dataset.r){ range=e.target.dataset.r; document.querySelectorAll('#range button').forEach(b=>b.classList.toggle('on',b===e.target)); drawChart(); }});
+$('showtemp').addEventListener('change',drawChart);
+window.addEventListener('resize',()=>{ if($('chart').classList.contains('on')) drawChart(); });
+const cache={};
+async function drawChart(){
+  if(!CFG) await loadConfig(true);
+  if(!ST||!ST.clock_known){ toast('The board has no clock yet: no chart'); return; }
+  const days=range==='1h'?1/24:range==='24h'?1:range==='7d'?7:90;
+  const now=ST.unix, t0=now-Math.round(days*86400);
+  const url=days<=1?`/api/series?tier=A&from=${t0}&to=${now}&every=${days<1?1:3}`:`/api/series?tier=B&from=${t0}&to=${now}&every=${days===7?1:6}`;
+  let data; try{ data=csv(await (await api(url)).text()); }catch(e){ toast('Series failed: '+e.message); return; }
+  const cv=$('cv'), dpr=window.devicePixelRatio||1, W=cv.clientWidth, H=360; cv.width=W*dpr; cv.height=H*dpr; const c=cv.getContext('2d'); c.scale(dpr,dpr);
+  const showT=$('showtemp').checked, L=showT?40:12, R=46, T=12, B=40, w=W-L-R, h=H-T-B;
+  const TH={blue:CFG.levels.blue,yellow:CFG.levels.yellow,red:CFG.levels.red};
+  const vals=days<=1?data.map(d=>d.do):data.flatMap(d=>[d.do_min,d.do_max]);
+  const ymin=Math.min(4.0,...vals.filter(v=>v>0))-0.2, ymax=Math.max(7.6,...vals)+0.2;
+  const X=t=>L+(t-t0)/(now-t0)*w, Y=v=>T+(ymax-v)/(ymax-ymin)*h;
+  c.clearRect(0,0,W,H);
+  // night shading from config
+  const [ns,ne]=[CFG.night.start,CFG.night.end].map(s=>{const [hh,mm]=s.split(':').map(Number); return hh*60+mm;});
+  c.fillStyle=css('--line'); c.globalAlpha=.55;
+  for(let d=-1; d<=days+1; d++){ const day=new Date((now-d*86400)*1000); day.setHours(0,0,0,0); const s=day.getTime()/1000+ns*60; const e=s+((ne>ns?ne-ns:ne+1440-ns))*60; if(e<t0||s>now) continue; c.fillRect(X(Math.max(s,t0)),T,X(Math.min(e,now))-X(Math.max(s,t0)),h); }
+  c.globalAlpha=1;
+  for(const [k,lv] of Object.entries(TH)){ const v=lv.mgl, hy=lv.hysteresis; c.fillStyle=css('--'+k); c.globalAlpha=.10; c.fillRect(L,Y(v+hy),w,Y(v-hy)-Y(v+hy)); c.globalAlpha=1; c.strokeStyle=css('--'+k); c.setLineDash([5,4]); c.lineWidth=1; c.beginPath(); c.moveTo(L,Y(v)); c.lineTo(L+w,Y(v)); c.stroke(); c.setLineDash([]); c.fillStyle=css('--'+k); c.font='11px system-ui'; c.fillText(v.toFixed(1),L+4,Y(v)-3); }
+  c.strokeStyle=css('--line'); c.lineWidth=1; c.fillStyle=css('--muted'); c.font='11px system-ui';
+  for(let v=Math.ceil(ymin*2)/2; v<=ymax; v+=0.5){ c.beginPath(); c.moveTo(L,Y(v)); c.lineTo(L+w,Y(v)); c.globalAlpha=.4; c.stroke(); c.globalAlpha=1; c.fillText(v.toFixed(1),L+w+6,Y(v)+4); }
+  if(days<1){ for(let m=0;m<=60;m+=10){ const t=t0+m*60; const d=new Date(t*1000); c.fillText(pad(d.getHours())+':'+pad(d.getMinutes()),X(t)-14,H-B+16);} }
+  else if(days===1){ for(let hh=0;hh<=24;hh+=3){ const t=t0+hh*3600; const d=new Date(t*1000); c.fillText(pad(d.getHours())+':'+pad(d.getMinutes()),X(t)-14,H-B+16);} }
+  else { const step=days===7?1:15; for(let d=days; d>=0; d-=step){ const t=now-d*86400; c.fillText(new Date(t*1000).toLocaleDateString('en-GB',{day:'2-digit',month:'short'}),X(t)-18,H-B+16);} }
+  if(!data.length){ c.fillText('no data in this range yet',L+10,T+20); return; }
+  if(days<=1){
+    c.strokeStyle=css('--text'); c.lineWidth=1.4; c.beginPath();
+    data.forEach((d,i)=> i? c.lineTo(X(d.ts),Y(d.do)) : c.moveTo(X(d.ts),Y(d.do))); c.stroke();
+    data.forEach(d=>{ c.fillStyle=css('--'+(LEVEL[d.level]==='normal'?'green':LEVEL[d.level])); c.fillRect(X(d.ts),H-B+24,Math.max(1,w/data.length+0.5),6); });
+  } else {
+    c.fillStyle=css('--text'); c.globalAlpha=.12; c.beginPath();
+    data.forEach((d,i)=> i? c.lineTo(X(d.ts),Y(d.do_min)) : c.moveTo(X(d.ts),Y(d.do_min)));
+    for(let i=data.length-1;i>=0;i--) c.lineTo(X(data[i].ts),Y(data[i].do_max));
+    c.closePath(); c.fill(); c.globalAlpha=1;
+    c.strokeStyle=css('--text'); c.lineWidth=1.2; c.beginPath(); data.forEach((d,i)=> i? c.lineTo(X(d.ts),Y(d.do_avg)) : c.moveTo(X(d.ts),Y(d.do_avg))); c.stroke();
+    data.forEach(d=>{ c.fillStyle=css('--'+(LEVEL[d.level_max]==='normal'?'green':LEVEL[d.level_max])); c.fillRect(X(d.ts),H-B+24,Math.max(1,w/data.length+0.5),6); });
+  }
+  // events in range: level changes as dashed lines in the new level's colour, fault, ack, boot, calibration
+  // as lettered ticks, service runs as a shaded band
+  await loadEventsData();
+  c.font='10px system-ui';
+  const marks=[]; // {x, text} for the hover readout
+  const mark=(x,col,label,r)=>{ if(r){ const [,m,v]=describe(r); marks.push({x,text:fmtTime(r.ts)+'  '+m+(v?' · '+v:'')}); } c.strokeStyle=css(col); c.globalAlpha=.7; c.setLineDash([2,3]); c.beginPath(); c.moveTo(x,T); c.lineTo(x,T+h); c.stroke(); c.setLineDash([]); c.globalAlpha=1; if(label){ c.fillStyle=css(col); c.fillText(label,x+2,T+11); } };
+  let runStart=null;
+  for(const r of EVENTS){
+    if(!r.ts||r.ts<t0||r.ts>now) continue;
+    const x=X(r.ts);
+    if(r.type===10){ const t=r.aux&255;
+      if(t===0) runStart=r.ts;
+      if(t===3&&runStart!=null){ c.fillStyle=css('--white'); c.globalAlpha=.3; c.fillRect(X(runStart),T,Math.max(2,x-X(runStart)),h); c.globalAlpha=1; c.fillStyle=css('--muted'); c.fillText('S',X(runStart)+2,T+11); marks.push({x:X(runStart),text:fmtTime(runStart)+'  Service run start'}); marks.push({x,text:fmtTime(r.ts)+'  Service run end'}); runStart=null; }
+      if(t===2&&((r.aux>>16)&255)===2) mark(x,'--red','F',r);
+      continue; }
+    if(r.type===2){ const t=r.aux&255;
+      if(t===1){ const to=LEVEL[(r.flags>>8)&255]; mark(x,'--'+(to==='normal'?'green':to),'',r); }
+      else if(t===2) mark(x,'--purple','!',r);
+      else if(t===4) mark(x,'--muted','A',r);
+      continue; }
+    if(r.type===3) mark(x,'--muted','B',r);
+    if(r.type===7&&r.aux===3) mark(x,'--muted','C',r);
+  }
+  if(runStart!=null){ c.fillStyle=css('--white'); c.globalAlpha=.3; c.fillRect(X(runStart),T,Math.max(2,X(now)-X(runStart)),h); c.globalAlpha=1; }
+  if(showT){
+    const temps=days<=1?data.map(d=>d.temp):data.map(d=>(d.temp_min+d.temp_max)/2);
+    const tmin=Math.min(...temps)-0.5, tmax=Math.max(...temps)+0.5, TY=v=>T+(tmax-v)/(tmax-tmin)*h;
+    c.strokeStyle=css('--purple'); c.globalAlpha=.7; c.lineWidth=1; c.beginPath();
+    data.forEach((d,i)=> i? c.lineTo(X(d.ts),TY(temps[i])) : c.moveTo(X(d.ts),TY(temps[i]))); c.stroke(); c.globalAlpha=1;
+    c.fillStyle=css('--purple'); for(let v=Math.ceil(tmin);v<=tmax;v++) c.fillText(v+'°',6,TY(v)+4);
+  }
+  c.fillStyle=css('--muted'); c.fillText('mg/L',L+w+6,T+2); if(showT){ c.fillStyle=css('--purple'); c.fillText('°C',6,T+2); }
+  $('legend').innerHTML=`<span><i style="background:var(--text)"></i>DO mg/L</span><span><i style="background:var(--blue)"></i>Blue ${TH.blue.mgl} ± ${TH.blue.hysteresis}</span><span><i style="background:var(--yellow)"></i>Yellow ${TH.yellow.mgl} ± ${TH.yellow.hysteresis}</span><span><i style="background:var(--red)"></i>Red ${TH.red.mgl} ± ${TH.red.hysteresis}</span><span><i style="background:var(--line);height:10px"></i>night ${CFG.night.start}–${CFG.night.end}</span><span>level strip at bottom</span><span>dashed = level change · S service run · ! fault · A ack · B boot · C calibration · F failed check</span>`;
+  const ro=$('readout');
+  cv.onmousemove=cv.ontouchmove=ev=>{ const r=cv.getBoundingClientRect(); const px=(ev.touches?ev.touches[0].clientX:ev.clientX)-r.left; if(px<L||px>L+w){ro.style.display='none';return;} const t=t0+(px-L)/w*(now-t0); let i=0; while(i<data.length-1&&data[i+1].ts<t) i++; const d=data[i]; const v=days<=1?d.do:d.do_avg; ro.style.display='block'; const near=marks.filter(m=>Math.abs(m.x-px)<=4).map(m=>m.text); ro.textContent=near.length?near.join('\n'):fmtTime(d.ts)+'  '+v.toFixed(2)+' mg/L'+(days<=1?'  '+d.sat.toFixed(1)+' %':''); };
+  cv.onmouseleave=()=>ro.style.display='none';
+}
+
+// ---------- events ----------
+const TYPE={3:'Boot',4:'Fault',5:'Config',6:'Correction',7:'Command',8:'TimeSync',9:'Daily'};
+const LADDER_EV=['Level','Effective level','FAULT','FAULT cleared','Ack','Pulse off','Heat on','Heat off'];
+const SVC_EV=['Service run start','Device start','Device end','Service run end','Service skipped','Service FAIL','Service fail cleared','Service inconclusive'];
+const OUTCOME=['—','pass','FAIL','inconclusive','unchecked'];
+const SKIP=['not Normal','fault','maintenance','missed','nothing to run'];
+function describe(r){
+  const dev=i=>(i+1)+' · '+(CFG&&CFG.devices[i+1]?CFG.devices[i+1].name:'device');
+  if(r.type===2){ const t=r.aux&255, d=(r.aux>>8)&255, from=LEVEL[r.flags&255], to=LEVEL[(r.flags>>8)&255];
+    if(t<=1) return [to, LADDER_EV[t]+' '+from+' → '+to, r.f0.toFixed(2)+' mg/L'];
+    if(t===5) return ['blue', 'Pulse off · '+dev(d), '']; return [t===2?'fault':'normal', LADDER_EV[t]||('event '+t), r.f0?r.f0.toFixed(2)+' mg/L':''];
+  }
+  if(r.type===10){ const t=r.aux&255, d=(r.aux>>8)&255, o=(r.aux>>16)&255, sk=(r.aux>>24)&255;
+    if(t===2) return [o===2?'fail':'service', 'Device end · '+dev(d), OUTCOME[o]+' · '+r.f0.toFixed(1)+' %'];
+    if(t===4) return ['service','Service skipped',SKIP[sk]||''];
+    if(t===5) return ['fail','Service FAIL · '+dev(d), r.f0.toFixed(1)+' %'];
+    return ['service', SVC_EV[t]||('service '+t), t===1?dev(d):''];
+  }
+  if(r.type===6) return ['system','Correction '+(r.aux===0?'(boot)':r.aux===1?'(daily)':'(changed)'), '×'+r.f0.toFixed(3)+' '+(r.f1>=0?'+':'')+r.f1.toFixed(2)];
+  if(r.type===9) return ['system','Daily summary','min '+r.f0.toFixed(2)+' · avg '+r.f1.toFixed(2)+' · max '+r.f2.toFixed(2)+' mg/L · temp '+r.f3.toFixed(1)];
+  if(r.type===8) return ['system','TimeSync','offset '+r.f0.toFixed(0)+' s'];
+  if(r.type===3) return ['system','Boot','reason '+r.aux];
+  if(r.type===7) return ['system','Command '+(r.aux===1?'maintenance on':r.aux===2?'maintenance off':'air calibration'),''];
+  return ['system',TYPE[r.type]||('type '+r.type),''];
+}
+let EVENTS=[];
+// Incremental: only records after the newest one already held.
+async function loadEventsData(){
+  const since=EVENTS.length?EVENTS[EVENTS.length-1].seq+1:0;
+  try{ const more=csv(await (await api('/api/events?since='+since)).text()); if(more.length) EVENTS=EVENTS.concat(more); }catch(e){ toast('Events failed: '+e.message); }
+}
+async function loadEvents(){
+  if(!CFG) await loadConfig(true);
+  await loadEventsData();
+  const col={normal:'--green',blue:'--blue',yellow:'--yellow',red:'--red',fault:'--purple',fail:'--red',service:'--white',system:'--muted'};
+  $('evcount').textContent=EVENTS.length+' events';
+  document.querySelector('#evtable tbody').innerHTML=EVENTS.slice().reverse().map(r=>{ const [k,m,v]=describe(r); const t=r.ts?fmtTime(r.ts):'boot+'+r.uptime_s+' s'; return `<tr><td class="mono muted" style="white-space:nowrap">${t}</td><td><span class="ev" style="background:var(${col[k]||'--muted'})"></span>${m}</td><td class="muted">${v}</td></tr>`; }).join('');
+}
+
+// ---------- service ----------
+async function loadService(){
+  let s; try{ s=await getJ('/api/service'); }catch(e){ toast('Service failed: '+e.message); return; }
+  if(!CFG) await loadConfig(true);
+  $('svc-win2').textContent=(ST?ST.service.window_start+' – '+ST.service.window_end:'')+(s.running?' · running':'');
+  $('svc-note').textContent='Starts at the first sample inside the window with at least '+CFG.service.min_headroom_pct+' % headroom from 100 %; otherwise at the end, inconclusive.'+(s.inconclusive_alert?' Inconclusive '+s.inconclusive_streak+' evenings running.':'');
+  $('svc-dur').textContent='a run takes '+Math.round(s.run_duration_s/60)+' min';
+  document.querySelector('#svctable tbody').innerHTML=s.devices.map((d,i)=>d.service_s?`<tr><td>${i+1} · ${d.name}</td><td>${d.last_response.toFixed(1)} %</td><td style="color:var(${d.last_outcome==='fail'?'--red':d.last_outcome==='pass'?'--green':'--muted'})">${d.last_outcome}${d.fail_active?' · alert active':''}</td></tr>`:'').join('')||'<tr><td class="muted">no device has service_s &gt; 0</td></tr>';
+  $('svc-last').textContent=s.devices.some(d=>d.fail_active)?'FAIL active':s.devices.some(d=>d.last_outcome==='pass')?'pass':'—';
+  if(!EVENTS.length) await loadEvents();
+  document.querySelector('#svchist tbody').innerHTML=EVENTS.filter(r=>r.type===10).slice().reverse().slice(0,60).map(r=>{ const t=r.aux&255,d=(r.aux>>8)&255,o=(r.aux>>16)&255; return `<tr><td class="mono muted">${r.ts?fmtTime(r.ts):'boot+'+r.uptime_s+' s'}</td><td>${SVC_EV[t]}</td><td>${[1,2,5,6].includes(t)?(d+1)+' · '+(CFG.devices[d+1]?CFG.devices[d+1].name:''):''}</td><td>${t===2||t===5?r.f0.toFixed(1)+' %':''}</td><td>${t===2?OUTCOME[o]:t===4?SKIP[(r.aux>>24)&255]||'':''}</td></tr>`; }).join('');
+}
+
+// ---------- tooltips: one sentence per setting, keyed by config path (devices.N → devices.*) ----------
+const TIPS={
+ 'levels.*.mgl':'The level enters when DO stays below (threshold − hysteresis) for the dwell time, and leaves again when DO stays above (threshold + hysteresis) for the recover time.',
+ 'levels.*.hysteresis':'Dead band around the threshold so the level does not flip back and forth when DO sits right at the edge.',
+ 'levels.*.dwell_s':'How long DO must stay below the entry value before the level activates. 0 = at once. Deeper levels should react faster.',
+ 'recover_sustain_s':'How long DO must stay above the exit value before the ladder steps one level back up. Going deeper is always immediate.',
+ 'levels.blue.slope_mgl_per_10min':'Also enter Blue when DO is falling faster than this (mg/L per 10 minutes) even if it is still above the threshold — catches a stopped pump early. 0 = off.',
+ 'devices.*.name':'Whatever is wired to this relay: air pump, powerhead, siren…',
+ 'devices.*.wired':'NC: the device is ON while the relay coil is off, so a dead controller leaves it running (fail-safe for aeration). NO: the device is on only while the coil is powered.',
+ 'devices.*.trigger':'Which alert switches this device on. Levels are cumulative: a Yellow device is also on at Red. heat = on when the water is too warm. none = unused.',
+ 'devices.*.mode':'on = switched on for the whole alert. pulse_off = cut once for a few seconds when the level activates, to restart a stalled DC pump; needs NC wiring.',
+ 'devices.*.ack_silences':'Acknowledging the alarm switches this device off for the ack-silence time — for sirens and beacons. Such a device is never on at Blue.',
+ 'devices.*.service_s':'Seconds the device runs during the evening service check, so a clogged airstone or a stuck pump is found before the night. 0 = not exercised.',
+ 'devices.*.min_response_pct':'Saturation change the check must see while this device runs to count it as working; less = FAIL alert. 0 = run it but do not judge.',
+ 'service.window.0':'The daily service check runs inside this window — before the night lock, while someone can still react.',
+ 'service.window.1':'End of the window; must not be later than the night start.',
+ 'service.settle_s':'Pause between two devices so their effects do not overlap in the measurement.',
+ 'service.tail_s':'How long the measurement continues after a device is switched off (the response peaks late).',
+ 'service.min_headroom_pct':'The run starts only when saturation is at least this far from 100 %, so a working device can make a visible difference. If that never happens, it runs at the window end and is marked inconclusive.',
+ 'service.inconclusive_days':'Alert after this many evenings without a usable check.',
+ 'service.induce_deficit_s':'Optional: before the check, cut one device for this many seconds to create a small oxygen deficit so the check has something to measure. 0 = off.',
+ 'service.induce_deficit_device':'The device (1..6) to cut for the induced deficit — normally the return pump.',
+ 'escalate_if_failed':'If a device failed its last check, an alert whose devices include it acts one level deeper — a Blue that relies on a dead bubbler becomes an audible Yellow.',
+ 'service.chirp':'Short beep when a service run starts.',
+ 'night.start':'Start of the night hours (for the night lock and the service window rule).',
+ 'night.end':'End of the night hours.',
+ 'night.lock':'Once an alert triggers at night, hold at least Blue until morning even if DO recovers — the devices keep running through the risky hours.',
+ 'night.unknown_time_is_night':'If the board does not know the time, treat it as night (the safe assumption).',
+ 'heat.on_c':'Devices with trigger = heat switch on above this water temperature (fan, chiller).',
+ 'heat.off_c':'…and off again below this. The gap avoids toggling.',
+ 'sample_period_s':'Seconds between probe readings (5..60). Every reading is logged.',
+ 'fault.consecutive_failures':'Consecutive failed, frozen or nonsense readings before FAULT is raised.',
+ 'fault.stuck_minutes':'A reading that has not changed at all for this long counts as frozen (the probe is dead or out of the water).',
+ 'fault.level':'Which alert FAULT behaves like: its devices, buzzer and push. Yellow or Red.',
+ 'fault.alert':'Raise FAULT when the sensor stops answering, freezes or reports nonsense. Off: such failures are only logged and counted.',
+ 'correction.scale':'Every value shown or logged is probe × scale + offset. 1.000 = the factory value. If the probe reports freshwater-referenced mg/L, use the seawater hint.',
+ 'correction.offset':'Constant added after the scale (mg/L). 0 = factory value.',
+ 'salinity_psu':'Only used to compute the seawater hint for the scale; it does not change any reading.',
+ 'ack_silence_s':'How long an acknowledgement mutes the buzzer and switches ack-silenced devices off. The alert level itself stays.',
+ 'pulse.s':'How long a pulse_off device is cut when its level activates.',
+ 'pulse.min_interval_s':'Minimum time between two pulses of the same device.',
+ 'signals.*.buzzer':'Sound pattern while this state is active. off = silent. Try them with the tester below.',
+ 'signals.*.volume':'0 = silent, 3 = loudest.',
+ 'signals.buzzer_hz':'Frequency of the buzzer tone (200..8000 Hz). Passive buzzers are loudest around 2–4 kHz.',
+ 'signals.led_brightness':'Brightness of the status LED (0..100 %). The colour codes are fixed.',
+ 'ntfy.enabled':'Send push notifications through ntfy.sh — one HTTPS POST per event, from the board itself.',
+ 'ntfy.topic':'Your ntfy topic (subscribe to it in the ntfy app). Treat it like a password: anyone who knows it can read the pushes.',
+ 'ntfy.min_level':'Lowest alert level that sends a push. FAULT, service failures and reboots are always sent when enabled.',
+};
+function tipFor(k){ return TIPS[k]||TIPS[k.replace(/\.\d+\./,'.*.').replace(/\.(normal|blue|yellow|red|fault)\./,'.*.')]||''; }
+function applyTips(){
+  document.querySelectorAll('#config [data-k]').forEach(el=>{ const t=tipFor(el.dataset.k); if(!t) return; el.title=t; const lab=el.closest('label'); if(lab){ lab.title=t; lab.classList.add('tip'); } });
+  document.querySelectorAll('#config th[data-tip]').forEach(th=>{ th.title=tipFor(th.dataset.tip); th.classList.add('tip'); });
+}
+
+// ---------- config ----------
+const get=(o,p)=>p.split('.').reduce((a,k)=>a==null?undefined:a[k],o);
+const set=(o,p,v)=>{ const ks=p.split('.'); let a=o; ks.slice(0,-1).forEach(k=>{ if(a[k]==null) a[k]={}; a=a[k]; }); a[ks[ks.length-1]]=v; };
+const sel=(opts,v,attrs='')=>`<select ${attrs}>${opts.map(o=>`<option ${o===v?'selected':''}>${o}</option>`).join('')}</select>`;
+async function loadConfig(quiet){
+  try{ CFG=await getJ('/api/config'); }catch(e){ if(!quiet) toast('Config failed: '+e.message); return; }
+  if(quiet) return;
+  const c=CFG;
+  $('lvcfg').innerHTML=['blue','yellow','red'].map(k=>{ const l=c.levels[k]; return `<tr><td><span class="tag ${k}">${k}</span></td><td><input class="mono" data-k="levels.${k}.mgl" size="5"></td><td><input class="mono" data-k="levels.${k}.hysteresis" size="5"></td><td><input class="mono" data-k="levels.${k}.dwell_s" size="4"></td><td class="mono">${(l.mgl-l.hysteresis).toFixed(2)}</td><td class="mono">${(l.mgl+l.hysteresis).toFixed(2)}</td></tr>`; }).join('');
+  $('devcfg').innerHTML=[1,2,3,4,5,6].map(n=>{ const d=c.devices[n]; return `<tr><td>${n}</td><td><input data-k="devices.${n}.name" size="14"></td><td>${sel(['NC','NO'],d.wired,`data-k="devices.${n}.wired"`)}</td><td>${sel(['none','blue','yellow','red','heat'],d.trigger,`data-k="devices.${n}.trigger"`)}</td><td>${sel(['on','pulse_off'],d.mode,`data-k="devices.${n}.mode"`)}</td><td><input type="checkbox" data-k="devices.${n}.ack_silences"></td><td><input class="mono" data-k="devices.${n}.service_s" size="4"></td><td><input class="mono" data-k="devices.${n}.min_response_pct" size="4"></td></tr>`; }).join('');
+  $('sigcfg').innerHTML=['normal','blue','yellow','red','fault'].map(k=>{ const s=c.signals[k]; const silent=k==='normal'; return `<tr><td><span class="tag ${k==='fault'?'heat':k==='normal'?'none':k}">${k}</span></td><td>${silent?'<span class="muted">off</span>':sel(['off','chirp','beep','double','triple','continuous'],s.buzzer,`data-k="signals.${k}.buzzer"`)}</td><td>${silent?'':sel([0,1,2,3],s.volume,`data-k="signals.${k}.volume"`)}</td></tr>`; }).join('');
+  document.querySelectorAll('#config [data-k]').forEach(el=>{ const v=get(c,el.dataset.k); if(el.type==='checkbox') el.checked=!!v; else el.value=v==null?'':v; });
+  if(ST&&ST.correction) $('scalehint').textContent=ST.correction.seawater_scale_hint.toFixed(3);
+  $('cfgmsg').className='note'; $('cfgmsg').textContent='schema '+c.schema;
+  applyTips();
+}
+function collectConfig(){
+  const c=JSON.parse(JSON.stringify(CFG));
+  document.querySelectorAll('#config [data-k]').forEach(el=>{
+    const k=el.dataset.k; const old=get(CFG,k);
+    let v=el.type==='checkbox'?el.checked:el.value;
+    if(typeof old==='number'){ v=Number(v); if(Number.isNaN(v)) v=old; }
+    if(el.tagName==='SELECT' && typeof old==='number') v=Number(v);
+    set(c,k,v);
+  });
+  return c;
+}
+async function saveConfig(){
+  try{ const r=await sendJ('/api/config',collectConfig(),'PUT'); const m=$('cfgmsg');
+    if(r.ok){ m.className='ok'; m.textContent='Saved and applied.'; toast('Config saved'); await loadConfig(); refresh(); }
+    else { m.className='warn'; m.textContent='Rejected at '+r.path+': '+r.message; }
+  }catch(e){ toast('Failed: '+e.message); }
+}
+function downloadConfig(){ const a=document.createElement('a'); a.href='data:application/json,'+encodeURIComponent(JSON.stringify(collectConfig(),null,2)); a.download='reefdo-config.json'; a.click(); }
+async function buzzerTest(){ try{ const r=await sendForm('/api/buzzer-test',{pattern:$('bt-pattern').value,volume:$('bt-volume').value,hz:$('bt-hz').value,s:$('bt-s').value}); toast(r.ok?'Playing':'Rejected'); }catch(e){ toast('Failed: '+e.message); } }
+async function ntfyTest(){ try{ const r=await sendJ('/api/ntfy-test',{}); toast(r.ok?'Test push sent':'Push failed (topic set? saved? online?)'); }catch(e){ toast('Failed: '+e.message); } }
+
+// ---------- maintenance ----------
+function relayButtons(){ if(!ST) return; $('relaytest').innerHTML=ST.devices.map((d,i)=>`<button class="btn maint-only" ${ST.ladder.maintenance?'':'disabled'} onclick="relayTest(${i+1})">${i+1} · ${d.name}</button>`).join(''); }
+async function relayTest(n){ try{ await sendJ('/api/cmd',{relay:{device:n,on:true}}); toast('Device '+n+' forced on for 5 s'); setTimeout(()=>sendJ('/api/cmd',{relay:{device:n,on:null}}).then(refresh),5000); }catch(e){ toast('Failed: '+e.message); } }
+async function ota(){
+  const f=$('otafile').files[0]; if(!f){ toast('Choose a .bin first'); return; }
+  const el=$('otaprog'); el.style.width='30%';
+  try{ const r=await fetch('/api/ota',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:f}); const j=await r.json(); el.style.width='100%';
+    toast(j.ok?'Image written to '+j.partition+' · rebooting':'OTA failed: '+(j.message||r.status)); }
+  catch(e){ el.style.width='0'; toast('OTA failed: '+e.message); }
+}
+
+// ---------- export ----------
+function exportSince(){ const since=localStorage.getItem('lastseq')||0; if(ST) localStorage.setItem('lastseq',ST.next_seq); $('lastseq').textContent=localStorage.getItem('lastseq'); location.href='/api/export.csv?since='+since; }
+function exportAll(){ if(ST) localStorage.setItem('lastseq',ST.next_seq); $('lastseq').textContent=localStorage.getItem('lastseq'); location.href='/api/export.csv?since=0'; }
+
+// ---------- setup ----------
+async function loadSetup(){
+  await refreshWifi(); const w=WIFI||{};
+  $('wifi-state').textContent=w.connected?('connected to '+w.ssid+' · '+w.ip+' · '+w.rssi+' dBm'):(w.ap?'setup AP up · not connected':'connecting to '+w.ssid);
+  $('wifi-ssid').value=w.ssid||'';
+  $('time-state').textContent=ST&&ST.clock_known?fmtTime(ST.unix)+' · tz '+(ST.tz/3600)+' h'+(w.ntp?' · NTP':''):'unknown';
+  $('time-here').textContent=new Date().toLocaleString('en-GB')+' · tz '+(tzHere()/3600)+' h';
+}
+async function saveWifi(){ try{ const r=await sendForm('/api/wifi',{ssid:$('wifi-ssid').value,pass:$('wifi-pass').value}); toast(r.ok?'Saved; connecting':'Rejected'); }catch(e){ toast('Failed: '+e.message); } }
+async function savePassword(){ try{ const pw=$('pw-new').value; const r=await sendForm('/api/passwd',{password:pw}); if(r.ok){ AUTH=btoa('reef:'+(pw||'reefdo')); localStorage.setItem('auth',AUTH); } toast(r.ok?'Password changed':'Rejected (max 32)'); }catch(e){ toast('Failed: '+e.message); } }
+
+// ---------- start ----------
+(async()=>{ if(AUTH){ try{ await getJ('/api/auth'); $('lock').textContent='🔓'; }catch(e){ AUTH=''; localStorage.removeItem('auth'); } } await loadConfig(true); await refresh(); await refreshWifi(); relayButtons(); show((location.hash||'#status').slice(1)); })();
+setInterval(async()=>{ await refresh(); relayButtons(); },5000);
+setInterval(()=>{ if($('chart').classList.contains('on')) drawChart(); },30000);
+setInterval(refreshWifi,15000);
+</script>
+</body>
+</html>

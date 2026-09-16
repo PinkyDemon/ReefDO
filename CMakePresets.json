@@ -1,0 +1,33 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "msvc",
+      "displayName": "MSVC — Visual Studio 2026 solution (daily work, Test Explorer)",
+      "generator": "Visual Studio 18 2026",
+      "architecture": { "value": "x64", "strategy": "set" },
+      "binaryDir": "${sourceDir}/out/msvc"
+    },
+    {
+      "name": "clang-coverage",
+      "displayName": "clang-cl + llvm-cov — 100 % coverage gate (run from a VS developer shell)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/coverage",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_COMPILER": "clang-cl",
+        "CMAKE_CXX_COMPILER": "clang-cl",
+        "CMAKE_LINKER": "lld-link",
+        "REEFDO_COVERAGE": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "msvc-debug",   "configurePreset": "msvc", "configuration": "Debug" },
+    { "name": "msvc-release", "configurePreset": "msvc", "configuration": "Release" },
+    { "name": "coverage",     "configurePreset": "clang-coverage", "targets": [ "coverage" ] }
+  ],
+  "testPresets": [
+    { "name": "msvc-debug", "configurePreset": "msvc", "configuration": "Debug", "output": { "outputOnFailure": true } }
+  ]
+}

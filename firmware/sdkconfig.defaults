@@ -1,0 +1,44 @@
+# Waveshare ESP32-S3-Relay-6CH: ESP32-S3-WROOM-1U-N16 (16 MB flash, no PSRAM)
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+
+# Compiler: C++23, optimise for size is not worth it on 16 MB; keep -Og for now for readable crashes
+CONFIG_COMPILER_CXX_EXCEPTIONS=n
+CONFIG_COMPILER_CXX_RTTI=n
+CONFIG_COMPILER_OPTIMIZATION_DEFAULT=y
+
+# Safety-relevant system settings
+CONFIG_ESP_TASK_WDT_EN=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=30
+CONFIG_ESP_TASK_WDT_PANIC=y
+CONFIG_ESP_INT_WDT=y
+CONFIG_ESP_BROWNOUT_DET=y
+CONFIG_ESP_SYSTEM_PANIC_PRINT_REBOOT=y
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
+
+# Console on the USB-C port: the board wires it to the S3's native USB-Serial-JTAG (VID 303A:1001), no bridge chip.
+# Windows' built-in usbser driver handles it; no vendor driver needed.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# Custom partition table (nvs, otadata, phy, ota_0, ota_1, coredump, littlefs)
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
+
+# Log level: info on the console
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# app_main loads and validates the stored config (ArduinoJson on the stack) before the sampler task exists
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY=y
+
+# OTA: a new image must confirm itself (sampler: ten good polls + two minutes) or the bootloader rolls back
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+# HTTP server: room for the Authorization header and the JSON bodies
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+CONFIG_HTTPD_MAX_URI_LEN=256
