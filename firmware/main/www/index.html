@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>reefdo</title>
+<link rel="icon" type="image/svg+xml" href="/logo.svg">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <style>
 :root{
   --bg:#f3f4f6; --card:#ffffff; --text:#111827; --muted:#6b7280; --line:#e5e7eb; --soft:#f9fafb;
@@ -25,8 +27,9 @@ a{color:inherit}
 button,input,select{font:inherit;color:inherit}
 header{position:sticky;top:0;z-index:5;background:var(--card);border-bottom:1px solid var(--line)}
 .bar{max-width:1040px;margin:0 auto;padding:10px 16px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
-.brand{font-weight:700;letter-spacing:.02em;font-size:17px}
-.brand small{color:var(--muted);font-weight:400;margin-left:6px}
+.brand{font-weight:700;letter-spacing:.02em;font-size:17px;display:flex;align-items:center;gap:8px}
+.logo{width:26px;height:26px}
+.brand small{color:var(--muted);font-weight:400;margin-left:0}
 .pill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-weight:600;font-size:13px;letter-spacing:.04em}
 .pill .dot{width:8px;height:8px;border-radius:50%;background:currentColor}
 .lv-normal{background:var(--green-bg);color:var(--green)}
@@ -102,7 +105,7 @@ h2{font-size:16px;margin:18px 0 10px}
 
 <header>
   <div class="bar">
-    <div class="brand">reefdo<small id="fw"></small></div>
+    <div class="brand"><img src="/logo.svg" alt="" class="logo">reefdo<small id="fw"></small></div>
     <span id="levelpill" class="pill lv-normal"><span class="dot"></span>…</span>
     <div class="sys">
       <span id="wifi" title="WiFi">📶</span>

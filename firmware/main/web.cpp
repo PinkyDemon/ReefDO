@@ -20,6 +20,10 @@
 
 extern const uint8_t sIndexStart[] asm("_binary_index_html_start");
 extern const uint8_t sIndexEnd[] asm("_binary_index_html_end");
+extern const uint8_t sLogoStart[] asm("_binary_logo_ReefDO_svg_start");
+extern const uint8_t sLogoEnd[] asm("_binary_logo_ReefDO_svg_end");
+extern const uint8_t sTouchStart[] asm("_binary_apple_touch_icon_png_start");
+extern const uint8_t sTouchEnd[] asm("_binary_apple_touch_icon_png_end");
 
 namespace web
 {
@@ -173,6 +177,21 @@ esp_err_t Index(httpd_req_t* pReq)
     httpd_resp_set_type(pReq, "text/html; charset=utf-8");
     httpd_resp_set_hdr(pReq, "Cache-Control", "no-cache");
     return httpd_resp_send(pReq, reinterpret_cast<const char*>(sIndexStart), sIndexEnd - sIndexStart);
+}
+
+esp_err_t Logo(httpd_req_t* pReq)
+{
+    httpd_resp_set_type(pReq, "image/svg+xml");
+    httpd_resp_set_hdr(pReq, "Cache-Control", "max-age=86400");
+    return httpd_resp_send(pReq, reinterpret_cast<const char*>(sLogoStart), sLogoEnd - sLogoStart);
+}
+
+// iOS home-screen icon: PNG only, transparency would render black
+esp_err_t TouchIcon(httpd_req_t* pReq)
+{
+    httpd_resp_set_type(pReq, "image/png");
+    httpd_resp_set_hdr(pReq, "Cache-Control", "max-age=86400");
+    return httpd_resp_send(pReq, reinterpret_cast<const char*>(sTouchStart), sTouchEnd - sTouchStart);
 }
 
 esp_err_t GetStatus(httpd_req_t* pReq)
@@ -449,6 +468,8 @@ void Start()
     cfg.uri_match_fn = httpd_uri_match_wildcard;
     ESP_ERROR_CHECK(httpd_start(&sServer, &cfg));
     Add("/", HTTP_GET, Index);
+    Add("/logo.svg", HTTP_GET, Logo);
+    Add("/apple-touch-icon.png", HTTP_GET, TouchIcon);
     Add("/api/status", HTTP_GET, GetStatus);
     Add("/api/service", HTTP_GET, GetService);
     Add("/api/auth", HTTP_GET, GetAuth);

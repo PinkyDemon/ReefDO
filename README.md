@@ -1,3 +1,5 @@
+<img src="assets/logo_ReefDO.svg" width="96" align="right" alt="ReefDO">
+
 # ReefDO
 
 Dissolved-oxygen failsafe for a small reef aquarium. A Rika RK500-04 optical DO probe (RS485 Modbus RTU) on a
@@ -122,9 +124,10 @@ Reads are open; writes need Basic auth (`reef` / your password), e.g. `curl -u r
 ## Layout
 
 ```
-core/       hardware-independent C++23 library (modbus, probe, filters, ladder, service, log, config, api, app, sim)
+core/       hardware-independent C++23 library (modbus, probe, filters, ladder, service, boost, log, config, api, app, sim)
   tests/    Catch2 tests, property tests, scenario runner on the virtual tank
-firmware/   ESP-IDF project: main/ (board, hal/, sampler, indicator, console, net, web + www/index.html, notify)
+firmware/   ESP-IDF project: main/ (board, hal/, sampler, indicator, console, net, web + www/, notify)
+assets/     the logo (SVG, embedded in the firmware and served at /logo.svg; www/apple-touch-icon.png is its 180 px iOS render)
 third_party/  Catch2, ArduinoJson (vendored)
 tools/      vsenv.cmd, idfenv.cmd, idf-shell.ps1, format.cmd
 ```
