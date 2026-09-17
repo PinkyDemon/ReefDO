@@ -110,6 +110,7 @@ int CmdStatus(int pArgc, char** pArgv)
     }
     std::printf("\nservice: %s device %u%s%s\n", PHASE[static_cast<int>(s.servicePhase)], s.serviceDevice,
                 s.serviceRunning ? "  RUNNING" : "", s.inconclusiveAlert ? "  inconclusive-streak" : "");
+    std::printf("boost: %s\n", s.boostRunning ? "RUNNING" : "idle");
     std::printf("log: A %u  B %u  E %u  D %u  next seq %lu  ticks %lu\n", static_cast<unsigned>(app.LogA().Count()),
                 static_cast<unsigned>(app.LogB().Count()), static_cast<unsigned>(app.LogE().Count()),
                 static_cast<unsigned>(app.LogD().Count()), static_cast<unsigned long>(s.nextSeq),

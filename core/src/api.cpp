@@ -134,6 +134,15 @@ std::size_t StatusJson(const app::App& pApp, const app::Clock& pClock, std::span
     config::FormatHhmm(c.service.windowEndMin, hhmm);
     svc["window_end"] = std::string_view(hhmm);
 
+    JsonObject bst = doc["boost"].to<JsonObject>();
+    bst["enabled"] = c.boost.enabled;
+    bst["running"] = s.boostRunning;
+    bst["target_mgl"] = c.boost.targetMgl;
+    config::FormatHhmm(c.boost.windowStartMin, hhmm);
+    bst["window_start"] = std::string_view(hhmm);
+    config::FormatHhmm(c.boost.windowEndMin, hhmm);
+    bst["window_end"] = std::string_view(hhmm);
+
     JsonObject logs = doc["log"].to<JsonObject>();
     logs["a"] = pApp.LogA().Count();
     logs["a_capacity"] = pApp.LogA().Capacity();

@@ -22,6 +22,7 @@ add_executable(reefdo_tests
   test_ladder_properties.cpp
   test_config.cpp
   test_service.cpp
+  test_boost.cpp
   test_log.cpp
   test_sim.cpp
   test_app.cpp

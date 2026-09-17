@@ -162,6 +162,7 @@ h2{font-size:16px;margin:18px 0 10px}
         <b>service window</b><span id="svc-window">—</span>
         <b>service</b><span id="svc-state">—</span>
         <b>last check</b><span id="svc-last">—</span>
+        <b>boost</b><span id="boost-state">—</span>
       </div>
     </div>
   </div>
@@ -238,10 +239,10 @@ h2{font-size:16px;margin:18px 0 10px}
   <div class="card">
     <h3>Devices</h3>
     <div style="overflow-x:auto"><table>
-      <thead><tr><th>#</th><th data-tip="devices.*.name">name</th><th data-tip="devices.*.wired">wired</th><th data-tip="devices.*.trigger">trigger</th><th data-tip="devices.*.mode">mode</th><th data-tip="devices.*.ack_silences">ack silences</th><th data-tip="devices.*.service_s">service (s)</th><th data-tip="devices.*.min_response_pct">min response (%)</th></tr></thead>
+      <thead><tr><th>#</th><th data-tip="devices.*.name">name</th><th data-tip="devices.*.wired">wired</th><th data-tip="devices.*.trigger">trigger</th><th data-tip="devices.*.mode">mode</th><th data-tip="devices.*.ack_silences">ack silences</th><th data-tip="devices.*.service_s">service (s)</th><th data-tip="devices.*.min_response_pct">min response (%)</th><th data-tip="devices.*.boost">boost</th></tr></thead>
       <tbody id="devcfg"></tbody>
     </table></div>
-    <div class="note">NC = on when the coil is de-energised = on when the controller is dead. <code>pulse_off</code> requires NC. Service = seconds the device runs in the daily check (0 = not exercised). Min response in % saturation (0 = run but don't judge).</div>
+    <div class="note">NC = on when the coil is de-energised = on when the controller is dead. <code>pulse_off</code> requires NC. Service = seconds the device runs in the daily check (0 = not exercised). Min response in % saturation (0 = run but don't judge). Boost = runs in the boost.</div>
   </div>
 
   <div class="card">
@@ -260,6 +261,19 @@ h2{font-size:16px;margin:18px 0 10px}
       <label class="c"><input type="checkbox" data-k="escalate_if_failed"> escalate one level deeper if a device failed its check</label>
       <label class="c"><input type="checkbox" data-k="service.chirp"> chirp at start</label>
     </div>
+  </div>
+
+  <div class="card">
+    <h3>Boost</h3>
+    <div class="form">
+      <label class="f">window start <input type="time" data-k="boost.window.0"></label>
+      <label class="f">window end <input type="time" data-k="boost.window.1"></label>
+      <label class="f">target (mg/L) <input data-k="boost.target_mgl"></label>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <label class="c"><input type="checkbox" data-k="boost.enabled"> enabled</label>
+    </div>
+    <div class="note">Runs the devices ticked <em>boost</em> above once a day inside the window, until DO reaches the target or the window ends. The ladder still acts on top of it.</div>
   </div>
 
   <div class="grid">
@@ -462,6 +476,7 @@ async function refresh(){
   $('ackbtn').disabled=!alarm||l.silenced; $('acknote').textContent=alarm?(l.silenced?'silenced':'silences the buzzer and ack devices for a while; the level stays'):'nothing to acknowledge';
   $('svc-window').textContent=s.service.window_start+' – '+s.service.window_end;
   $('svc-state').textContent=s.service.running?('running · device '+s.service.device+' · '+s.service.phase):'idle'+(s.service.inconclusive_alert?' · inconclusive streak':'');
+  $('boost-state').textContent=s.boost.enabled?(s.boost.window_start+' – '+s.boost.window_end+' · to '+s.boost.target_mgl.toFixed(2)+' mg/L'+(s.boost.running?' · running':'')):'off';
   $('devs').innerHTML=s.devices.map(devCard).join('');
   $('sys-up').textContent=fmtUp(s.uptime_s); $('sys-fw').textContent=s.fw+(WIFI&&WIFI.partition?' · '+WIFI.partition+' · '+WIFI.image:'');
   $('sys-time').textContent=s.clock_known?fmtTime(s.unix)+' (tz '+(s.tz/3600)+' h)':'unknown';
@@ -540,6 +555,7 @@ async function drawChart(){
   const marks=[]; // {x, text} for the hover readout
   const mark=(x,col,label,r)=>{ if(r){ const [,m,v]=describe(r); marks.push({x,text:fmtTime(r.ts)+'  '+m+(v?' · '+v:'')}); } c.strokeStyle=css(col); c.globalAlpha=.7; c.setLineDash([2,3]); c.beginPath(); c.moveTo(x,T); c.lineTo(x,T+h); c.stroke(); c.setLineDash([]); c.globalAlpha=1; if(label){ c.fillStyle=css(col); c.fillText(label,x+2,T+11); } };
   let runStart=null;
+  let boostStart=null;
   for(const r of EVENTS){
     if(!r.ts||r.ts<t0||r.ts>now) continue;
     const x=X(r.ts);
@@ -547,6 +563,10 @@ async function drawChart(){
       if(t===0) runStart=r.ts;
       if(t===3&&runStart!=null){ c.fillStyle=css('--white'); c.globalAlpha=.3; c.fillRect(X(runStart),T,Math.max(2,x-X(runStart)),h); c.globalAlpha=1; c.fillStyle=css('--muted'); c.fillText('S',X(runStart)+2,T+11); marks.push({x:X(runStart),text:fmtTime(runStart)+'  Service run start'}); marks.push({x,text:fmtTime(r.ts)+'  Service run end'}); runStart=null; }
       if(t===2&&((r.aux>>16)&255)===2) mark(x,'--red','F',r);
+      continue; }
+    if(r.type===11){ const t=r.aux&255;
+      if(t===0) boostStart=r.ts;
+      else if(boostStart!=null){ c.fillStyle=css('--cyan'); c.globalAlpha=.25; c.fillRect(X(boostStart),T,Math.max(2,x-X(boostStart)),h); c.globalAlpha=1; c.fillStyle=css('--cyan'); c.fillText('boost',X(boostStart)+2,T+11); marks.push({x:X(boostStart),text:fmtTime(boostStart)+'  Boost start'}); marks.push({x,text:fmtTime(r.ts)+'  '+describe(r)[1]+' · '+describe(r)[2]}); boostStart=null; }
       continue; }
     if(r.type===2){ const t=r.aux&255;
       if(t===1){ const to=LEVEL[(r.flags>>8)&255]; mark(x,'--'+(to==='normal'?'green':to),'',r); }
@@ -557,6 +577,7 @@ async function drawChart(){
     if(r.type===7&&r.aux===3) mark(x,'--muted','C',r);
   }
   if(runStart!=null){ c.fillStyle=css('--white'); c.globalAlpha=.3; c.fillRect(X(runStart),T,Math.max(2,X(now)-X(runStart)),h); c.globalAlpha=1; }
+  if(boostStart!=null){ c.fillStyle=css('--cyan'); c.globalAlpha=.25; c.fillRect(X(boostStart),T,Math.max(2,X(now)-X(boostStart)),h); c.globalAlpha=1; c.fillStyle=css('--cyan'); c.fillText('boost',X(boostStart)+2,T+11); }
   if(showT){
     const temps=days<=1?data.map(d=>d.temp):data.map(d=>(d.temp_min+d.temp_max)/2);
     const tmin=Math.min(...temps)-0.5, tmax=Math.max(...temps)+0.5, TY=v=>T+(tmax-v)/(tmax-tmin)*h;
@@ -575,6 +596,7 @@ async function drawChart(){
 const TYPE={3:'Boot',4:'Fault',5:'Config',6:'Correction',7:'Command',8:'TimeSync',9:'Daily'};
 const LADDER_EV=['Level','Effective level','FAULT','FAULT cleared','Ack','Pulse off','Heat on','Heat off'];
 const SVC_EV=['Service run start','Device start','Device end','Service run end','Service skipped','Service FAIL','Service fail cleared','Service inconclusive'];
+const BOOST_EV=['Boost start','Boost target reached','Boost window end','Boost paused'];
 const OUTCOME=['—','pass','FAIL','inconclusive','unchecked'];
 const SKIP=['not Normal','fault','maintenance','missed','nothing to run'];
 function describe(r){
@@ -589,6 +611,7 @@ function describe(r){
     if(t===5) return ['fail','Service FAIL · '+dev(d), r.f0.toFixed(1)+' %'];
     return ['service', SVC_EV[t]||('service '+t), t===1?dev(d):''];
   }
+  if(r.type===11) return ['boost', BOOST_EV[r.aux&255]||('boost '+(r.aux&255)), r.f0.toFixed(2)+' of '+r.f1.toFixed(2)+' mg/L'];
   if(r.type===6) return ['system','Correction '+(r.aux===0?'(boot)':r.aux===1?'(daily)':'(changed)'), '×'+r.f0.toFixed(3)+' '+(r.f1>=0?'+':'')+r.f1.toFixed(2)];
   if(r.type===9) return ['system','Daily summary','min '+r.f0.toFixed(2)+' · avg '+r.f1.toFixed(2)+' · max '+r.f2.toFixed(2)+' mg/L · temp '+r.f3.toFixed(1)];
   if(r.type===8) return ['system','TimeSync','offset '+r.f0.toFixed(0)+' s'];
@@ -605,7 +628,7 @@ async function loadEventsData(){
 async function loadEvents(){
   if(!CFG) await loadConfig(true);
   await loadEventsData();
-  const col={normal:'--green',blue:'--blue',yellow:'--yellow',red:'--red',fault:'--purple',fail:'--red',service:'--white',system:'--muted'};
+  const col={normal:'--green',blue:'--blue',yellow:'--yellow',red:'--red',fault:'--purple',fail:'--red',service:'--white',boost:'--cyan',system:'--muted'};
   $('evcount').textContent=EVENTS.length+' events';
   document.querySelector('#evtable tbody').innerHTML=EVENTS.slice().reverse().map(r=>{ const [k,m,v]=describe(r); const t=r.ts?fmtTime(r.ts):'boot+'+r.uptime_s+' s'; return `<tr><td class="mono muted" style="white-space:nowrap">${t}</td><td><span class="ev" style="background:var(${col[k]||'--muted'})"></span>${m}</td><td class="muted">${v}</td></tr>`; }).join('');
 }
@@ -647,6 +670,11 @@ const TIPS={
  'service.induce_deficit_device':'The device (1..6) to cut for the induced deficit — normally the return pump.',
  'escalate_if_failed':'If a device failed its last check, an alert whose devices include it acts one level deeper — a Blue that relies on a dead bubbler becomes an audible Yellow.',
  'service.chirp':'Short beep when a service run starts.',
+ 'devices.*.boost':'Run this device during the boost.',
+ 'boost.enabled':'Once a day, inside the window, run the boost devices until DO reaches the target or the window ends. Pauses for a service run or maintenance.',
+ 'boost.window.0':'Start of the daily boost window (local time). By default it follows the service window, so the check runs on a quiet tank first.',
+ 'boost.window.1':'End of the boost window; the run stops here even if the target was not reached.',
+ 'boost.target_mgl':'DO (mg/L) at which the boost stops early.',
  'night.start':'Start of the night hours (for the night lock and the service window rule).',
  'night.end':'End of the night hours.',
  'night.lock':'Once an alert triggers at night, hold at least Blue until morning even if DO recovers — the devices keep running through the risky hours.',
@@ -687,7 +715,7 @@ async function loadConfig(quiet){
   if(quiet) return;
   const c=CFG;
   $('lvcfg').innerHTML=['blue','yellow','red'].map(k=>{ const l=c.levels[k]; return `<tr><td><span class="tag ${k}">${k}</span></td><td><input class="mono" data-k="levels.${k}.mgl" size="5"></td><td><input class="mono" data-k="levels.${k}.hysteresis" size="5"></td><td><input class="mono" data-k="levels.${k}.dwell_s" size="4"></td><td class="mono">${(l.mgl-l.hysteresis).toFixed(2)}</td><td class="mono">${(l.mgl+l.hysteresis).toFixed(2)}</td></tr>`; }).join('');
-  $('devcfg').innerHTML=[1,2,3,4,5,6].map(n=>{ const d=c.devices[n]; return `<tr><td>${n}</td><td><input data-k="devices.${n}.name" size="14"></td><td>${sel(['NC','NO'],d.wired,`data-k="devices.${n}.wired"`)}</td><td>${sel(['none','blue','yellow','red','heat'],d.trigger,`data-k="devices.${n}.trigger"`)}</td><td>${sel(['on','pulse_off'],d.mode,`data-k="devices.${n}.mode"`)}</td><td><input type="checkbox" data-k="devices.${n}.ack_silences"></td><td><input class="mono" data-k="devices.${n}.service_s" size="4"></td><td><input class="mono" data-k="devices.${n}.min_response_pct" size="4"></td></tr>`; }).join('');
+  $('devcfg').innerHTML=[1,2,3,4,5,6].map(n=>{ const d=c.devices[n]; return `<tr><td>${n}</td><td><input data-k="devices.${n}.name" size="14"></td><td>${sel(['NC','NO'],d.wired,`data-k="devices.${n}.wired"`)}</td><td>${sel(['none','blue','yellow','red','heat'],d.trigger,`data-k="devices.${n}.trigger"`)}</td><td>${sel(['on','pulse_off'],d.mode,`data-k="devices.${n}.mode"`)}</td><td><input type="checkbox" data-k="devices.${n}.ack_silences"></td><td><input class="mono" data-k="devices.${n}.service_s" size="4"></td><td><input class="mono" data-k="devices.${n}.min_response_pct" size="4"></td><td><input type="checkbox" data-k="devices.${n}.boost"></td></tr>`; }).join('');
   $('sigcfg').innerHTML=['normal','blue','yellow','red','fault'].map(k=>{ const s=c.signals[k]; const silent=k==='normal'; return `<tr><td><span class="tag ${k==='fault'?'heat':k==='normal'?'none':k}">${k}</span></td><td>${silent?'<span class="muted">off</span>':sel(['off','chirp','beep','double','triple','continuous'],s.buzzer,`data-k="signals.${k}.buzzer"`)}</td><td>${silent?'':sel([0,1,2,3],s.volume,`data-k="signals.${k}.volume"`)}</td></tr>`; }).join('');
   document.querySelectorAll('#config [data-k]').forEach(el=>{ const v=get(c,el.dataset.k); if(el.type==='checkbox') el.checked=!!v; else el.value=v==null?'':v; });
   if(ST&&ST.correction) $('scalehint').textContent=ST.correction.seawater_scale_hint.toFixed(3);

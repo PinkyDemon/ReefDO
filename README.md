@@ -14,6 +14,8 @@ push notification. Everything runs on the board: logging, web UI, WiFi, time, up
 - FAULT when the probe stops answering, freezes or reports nonsense — treated as a red-level alert.
 - A daily service run in the evening exercises the failsafe devices one by one and checks that each one
   actually moves the oxygen level; a device that does not is flagged.
+- An optional boost runs chosen devices inside a daily window until DO reaches a target,
+  so the tank starts the night with a full buffer.
 - Web UI (status, chart, events, service history, configuration, maintenance, export, setup), USB console,
   OTA updates with automatic rollback, optional push through ntfy.sh.
 
@@ -111,8 +113,9 @@ Reads are open; writes need Basic auth (`reef` / your password), e.g. `curl -u r
 `sample_period_s`, `levels.{blue,yellow,red}.{mgl,hysteresis,dwell_s}`, `levels.blue.slope_mgl_per_10min`,
 `recover_sustain_s`, `night.{start,end,lock,unknown_time_is_night}`, `pulse.{s,min_interval_s}`,
 `heat.{on_c,off_c}`, `fault.{consecutive_failures,stuck_minutes,level,alert}`, `ack_silence_s`,
-`escalate_if_failed`, `devices."1".."6".{name,wired,trigger,mode,ack_silences,service_s,min_response_pct}`,
+`escalate_if_failed`, `devices."1".."6".{name,wired,trigger,mode,ack_silences,service_s,min_response_pct,boost}`,
 `service.{window,settle_s,tail_s,min_headroom_pct,inconclusive_days,chirp,induce_deficit_s,induce_deficit_device}`,
+`boost.{enabled,window,target_mgl}`,
 `correction.{scale,offset}`, `salinity_psu`, `allow_zero_cal`, `ntfy.{enabled,topic,min_level}`,
 `signals.{buzzer_hz,led_brightness,normal,blue,yellow,red,fault}` with `{buzzer,volume}` per state.
 

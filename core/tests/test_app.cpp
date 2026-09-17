@@ -467,3 +467,47 @@ TEST_CASE("Induced deficit cuts the return pump before the check; persistent ser
     r.app.RestoreService(p);
     REQUIRE(r.app.ServicePersistent() == p);
 }
+
+TEST_CASE("The boost runs its device inside its window, yields to maintenance, and stops at the target", "[app]")
+{
+    reefdo::config::Config c = ExampleConfig();
+    c.boost.enabled = true;
+    c.boost.windowStartMin = 18 * 60 + 10;
+    c.boost.windowEndMin = 18 * 60 + 40;
+    c.boost.targetMgl = 6.4f; // ≈ 96 % in the simulated tank
+    c.boost.devices[2] = true; // the strong air pump
+    Scenario s(c);
+    s.Start();
+    s.tank.SetSat(90.0f);
+    s.RunUntil(18, 10);
+    s.RunS(30);
+    REQUIRE(s.app.GetStatus().boostRunning);
+    REQUIRE(s.app.GetStatus().deviceOn[2]);
+    REQUIRE(s.app.GetStatus().level == Level::Normal);
+
+    s.app.SetMaintenance(true, s.clock);
+    s.Tick();
+    REQUIRE_FALSE(s.app.GetStatus().boostRunning);
+    REQUIRE_FALSE(s.app.GetStatus().deviceOn[2]);
+    s.app.SetMaintenance(false, s.clock);
+    s.Tick();
+    REQUIRE(s.app.GetStatus().boostRunning); // resumed: the window is still open
+
+    s.RunUntil(18, 40);
+    REQUIRE_FALSE(s.app.GetStatus().boostRunning);
+    REQUIRE_FALSE(s.app.GetStatus().deviceOn[2]);
+    std::size_t reached = 0, paused = 0, starts = 0;
+    for(std::size_t i = 0; i < s.app.LogE().Count(); ++i)
+    {
+        const auto r = s.app.LogE().At(i);
+        if(r->type != Type::Boost) continue;
+        REQUIRE_THAT(r->f1, WithinAbs(6.4, 1e-6));
+        starts += r->aux == static_cast<uint32_t>(reefdo::boost::EventType::Start);
+        paused += r->aux == static_cast<uint32_t>(reefdo::boost::EventType::Paused);
+        reached += r->aux == static_cast<uint32_t>(reefdo::boost::EventType::Reached);
+    }
+    REQUIRE(starts == 2);
+    REQUIRE(paused == 1);
+    REQUIRE(reached == 1);
+    REQUIRE(s.EventsOf(Type::Boost) == 4);
+}

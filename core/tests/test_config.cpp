@@ -32,7 +32,7 @@ const char* sExample = R"({
   "fault": { "consecutive_failures": 5, "stuck_minutes": 30, "level": "yellow", "alert": true },
   "ack_silence_s": 1800,
   "devices": {
-    "1": { "name": "small bubbler",    "wired": "NC", "trigger": "blue",   "mode": "on",        "service_s": 300, "min_response_pct": 1.0 },
+    "1": { "name": "small bubbler",    "wired": "NC", "trigger": "blue",   "mode": "on",        "service_s": 300, "min_response_pct": 1.0, "boost": true },
     "2": { "name": "extra powerhead",  "wired": "NC", "trigger": "blue",   "mode": "on",        "service_s": 300, "min_response_pct": 0 },
     "3": { "name": "strong air pump",  "wired": "NC", "trigger": "yellow", "mode": "on",        "service_s": 300, "min_response_pct": 1.0 },
     "4": { "name": "siren",            "wired": "NO", "trigger": "yellow", "mode": "on",        "ack_silences": true },
@@ -42,6 +42,7 @@ const char* sExample = R"({
   "service": { "window": ["19:30", "21:00"], "settle_s": 120, "tail_s": 60, "min_headroom_pct": 3.0,
                "inconclusive_days": 5, "escalate_if_failed": true, "chirp": true,
                "induce_deficit_s": 0, "induce_deficit_device": 5 },
+  "boost": { "enabled": true, "window": ["19:30", "20:00"], "target_mgl": 6.5 },
   "correction": { "scale": 1.0, "offset": 0.0 },
   "salinity_psu": 35.0,
   "allow_zero_cal": false,
@@ -155,6 +156,11 @@ TEST_CASE("The example document loads into the expected fields", "[config]")
     REQUIRE(c.service.windowStartMin == 19 * 60 + 30);
     REQUIRE(c.service.windowEndMin == 21 * 60);
     REQUIRE(c.service.induceDeficitDevice == 5);
+    REQUIRE(c.boost.enabled);
+    REQUIRE(c.boost.windowStartMin == 19 * 60 + 30);
+    REQUIRE(c.boost.windowEndMin == 20 * 60);
+    REQUIRE(c.boost.devices[0]);
+    REQUIRE_FALSE(c.boost.devices[1]);
     REQUIRE(c.ladder.escalateIfFailed);
     REQUIRE(c.correction.IsFactory());
     REQUIRE(c.ntfy.minLevel == Level::Blue);
@@ -242,6 +248,13 @@ TEST_CASE("Every wrong-type and bad-value path reports its dotted key", "[config
         {R"({"service":{"window": ["19:30"]}})", LoadError::WrongType, "service.window"},
         {R"({"service":{"window": ["19:30", "x"]}})", LoadError::BadValue, "service.window[1]"},
         {R"({"service":{"window": [1930, "21:00"]}})", LoadError::WrongType, "service.window[0]"},
+        {R"({"boost":{"window": "19:30-20:00"}})", LoadError::WrongType, "boost.window"},
+        {R"({"boost":{"window": ["19:30"]}})", LoadError::WrongType, "boost.window"},
+        {R"({"boost":{"window": ["19:30", "x"]}})", LoadError::BadValue, "boost.window[1]"},
+        {R"({"boost":{"window": [1930, "20:00"]}})", LoadError::WrongType, "boost.window[0]"},
+        {R"({"boost":{"enabled": "yes"}})", LoadError::WrongType, "boost.enabled"},
+        {R"({"boost":{"target_mgl": "high"}})", LoadError::WrongType, "boost.target_mgl"},
+        {R"({"devices":{"1":{"boost": 1}}})", LoadError::WrongType, "devices.1.boost"},
     };
     for(const Case& k : cases)
     {
@@ -299,6 +312,9 @@ TEST_CASE("Every validation rule fires on its own key", "[config]")
         {"service.min_headroom_pct", [](Config& pC) { pC.service.minHeadroomPct = 21.0f; }},
         {"service.inconclusive_days", [](Config& pC) { pC.service.inconclusiveDays = 0; }},
         {"service.induce_deficit_s", [](Config& pC) { pC.service.induceDeficitS = 601; }},
+        {"boost.window", [](Config& pC) { pC.boost.windowStartMin = pC.boost.windowEndMin; }},
+        {"boost.target_mgl", [](Config& pC) { pC.boost.targetMgl = 0.5f; }},
+        {"boost.target_mgl", [](Config& pC) { pC.boost.targetMgl = 16.0f; }},
         {"service.induce_deficit_device",
          [](Config& pC)
          {

@@ -8,6 +8,7 @@ set(REEFDO_CORE_SOURCES
   src/ladder.cpp
   src/config.cpp
   src/service.cpp
+  src/boost.cpp
   src/log.cpp
   src/sim.cpp
   src/app.cpp

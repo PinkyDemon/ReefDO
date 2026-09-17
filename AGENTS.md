@@ -25,6 +25,8 @@ Facts an agent needs to work in this repository. The README covers usage; this c
 - The ladder (`core/src/ladder.cpp`) decides device states, whether the buzzer may sound, and the LED colour;
   the firmware only renders. Config decides buzzer patterns; LED codes are fixed in `indicator.cpp`.
 - Blue is silent unless configured; Normal is always silent; FAULT acts as `fault.level` (Red by default).
+- Device demand is the OR of the ladder, the service run (`service.cpp`) and the boost (`boost.cpp`);
+  the boost yields to the other two and runs at most once per local day.
 - Writes over HTTP need Basic auth; reads are open. Never log or store the password anywhere but NVS.
 - The log rings assume raw NOR flash: a torn record seals its segment, a partial tail is dropped on open,
   segments are erased right before reuse. Tests model this in `core/tests/fake_store.hpp`.

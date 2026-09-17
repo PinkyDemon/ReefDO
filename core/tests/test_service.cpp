@@ -22,6 +22,8 @@ Config ExampleCfg()
     c.devices[0] = {300, 1.0f}; // bubbler, judged
     c.devices[1] = {300, 0.0f}; // powerhead, unchecked
     c.devices[2] = {300, 1.0f}; // strong pump, judged
+    c.windowStartMin = 19 * 60 + 30; // the scenarios below are written for 19:30–21:00
+    c.windowEndMin = 21 * 60;
     return c;
 }
 

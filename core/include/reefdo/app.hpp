@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <optional>
 
+#include "reefdo/boost.hpp"
 #include "reefdo/config.hpp"
 #include "reefdo/filter.hpp"
 #include "reefdo/fixed_vector.hpp"
@@ -89,6 +90,7 @@ struct Status
     bool chirp = false; // this tick only
     bool serviceRunning = false;
     service::Phase servicePhase = service::Phase::Idle;
+    bool boostRunning = false;
     uint8_t serviceDevice = 0;
     std::array<bool, DEVICES> deviceFailed{};
     bool inconclusiveAlert = false;
@@ -146,6 +148,7 @@ private:
     void LogSimple(const Clock& pClock, log::Type pType, uint32_t pAux, float pF0, float pF1);
     void LogLadderEvents(const Clock& pClock, const ladder::Output& pOut, float pDoNow);
     void LogServiceEvents(const Clock& pClock, const service::Output& pOut);
+    void LogBoostEvents(const Clock& pClock, const boost::Output& pOut);
     void Notify(Notification pN);
     void Aggregate(const Clock& pClock, const probe::Reading& pR, float pDoC, ladder::Level pEff);
     void DailyRollover(const Clock& pClock, const std::optional<service::LocalTime>& pLt);
@@ -164,6 +167,7 @@ private:
     ladder::State mLadder;
     service::Config mServiceCfg;
     service::State mService;
+    boost::State mBoost;
     service::Persistent mServiceSaved;
 
     filter::Median5 mMedDo;

@@ -8,6 +8,7 @@
 #include <span>
 #include <string_view>
 
+#include "reefdo/boost.hpp"
 #include "reefdo/correction.hpp"
 #include "reefdo/fixed_string.hpp"
 #include "reefdo/ladder.hpp"
@@ -29,8 +30,8 @@ struct DeviceSettings
 
 struct ServiceConfig
 {
-    uint16_t windowStartMin = 19 * 60 + 30; // local minutes after midnight
-    uint16_t windowEndMin = 21 * 60;
+    uint16_t windowStartMin = 19 * 60; // local minutes after midnight
+    uint16_t windowEndMin = 19 * 60 + 30;
     uint32_t settleS = 120;
     uint32_t tailS = 60;
     float minHeadroomPct = 3.0f;
@@ -95,6 +96,7 @@ struct Config
     ServiceConfig service;
     NtfyConfig ntfy;
     SignalsConfig signals;
+    boost::Config boost;
     bool operator==(const Config&) const = default;
 };
 

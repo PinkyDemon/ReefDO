@@ -48,8 +48,8 @@ struct DeviceConfig
 
 struct Config
 {
-    uint16_t windowStartMin = 19 * 60 + 30;
-    uint16_t windowEndMin = 21 * 60;
+    uint16_t windowStartMin = 19 * 60;
+    uint16_t windowEndMin = 19 * 60 + 30;
     uint32_t settleS = 120;
     uint32_t tailS = 60;
     float minHeadroomPct = 3.0f;

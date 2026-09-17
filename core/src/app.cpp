@@ -191,6 +191,23 @@ void App::LogLadderEvents(const Clock& pClock, const ladder::Output& pOut, float
     }
 }
 
+void App::LogBoostEvents(const Clock& pClock, const boost::Output& pOut)
+{
+    for(const boost::Event& e : pOut.events)
+    {
+        log::Record r;
+        r.ts = pClock.unixS.value_or(0);
+        r.uptimeS = UptimeS(pClock);
+        r.type = log::Type::Boost;
+        r.level = static_cast<uint8_t>(mStatus.effective);
+        r.aux = static_cast<uint32_t>(e.type);
+        r.f0 = e.doMgl;
+        r.f1 = mCfg.boost.targetMgl;
+        Write(r, true);
+        ++mDaily.events;
+    }
+}
+
 void App::LogServiceEvents(const Clock& pClock, const service::Output& pOut)
 {
     for(const service::Event& e : pOut.events)
@@ -338,10 +355,19 @@ void App::Tick(const Clock& pClock)
     mStatus.inconclusiveAlert = so.inconclusiveAlert;
     mStatus.chirp = so.chirp; // runs start only at Normal, where the buzzer is silent
 
+    // 3b. Boost: yields to a service run and to maintenance
+    boost::Input bi;
+    bi.local = lt;
+    bi.doMgl = li.doMgl; // a stuck reading is no reading here either
+    bi.serviceRunning = so.running;
+    bi.maintenance = mStatus.maintenance;
+    const boost::Output bo = boost::Step(mBoost, bi, mCfg.boost);
+    mStatus.boostRunning = bo.running;
+
     // 4. Merge device demands; apply polarity
     for(std::size_t i = 0; i < DEVICES; ++i)
     {
-        bool on = lo.deviceOn[i] || so.deviceOn[i];
+        bool on = lo.deviceOn[i] || so.deviceOn[i] || bo.deviceOn[i];
         if(so.cutDevice.has_value() && *so.cutDevice == i) on = false;
         mAutoOn[i] = on;
         if(mStatus.maintenance && mOverride[i].has_value()) on = *mOverride[i] || on; // automatic demands win
@@ -383,6 +409,7 @@ void App::Tick(const Clock& pClock)
     }
     LogLadderEvents(pClock, lo, doNow);
     LogServiceEvents(pClock, so);
+    LogBoostEvents(pClock, bo);
     AlertRepeat(pClock);
 
     // Correction parameters go into the log once a day, just before the service window opens.

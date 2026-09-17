@@ -43,6 +43,8 @@ inline reefdo::config::Config ExampleConfig()
     dev(3, "siren", false, Trigger::Yellow, Mode::On, true, 0, 0.0f);
     dev(4, "return pump", true, Trigger::Blue, Mode::PulseOff, false, 0, 0.0f);
     dev(5, "unused", false, Trigger::None, Mode::On, false, 0, 0.0f);
+    c.service.windowStartMin = 19 * 60 + 30; // the scenarios are written for 19:30–21:00
+    c.service.windowEndMin = 21 * 60;
     return c;
 }
 

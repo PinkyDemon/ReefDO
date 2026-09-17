@@ -73,6 +73,9 @@ TEST_CASE("status_json describes the device, the ladder thresholds, and every de
     REQUIRE(d["devices"][4]["on"] == true);
     REQUIRE(d["devices"][4]["energised"] == false);
     REQUIRE(d["service"]["window_start"] == "19:30");
+    REQUIRE(d["boost"]["enabled"] == false);
+    REQUIRE(d["boost"]["running"] == false);
+    REQUIRE(d["boost"]["window_end"] == "20:00");
     REQUIRE(d["log"]["a"].as<uint32_t>() > 10);
 
     // probe down: the optionals become null

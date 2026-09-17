@@ -24,6 +24,7 @@ enum class Type : uint8_t
     TimeSync = 8, // f0 = offset applied (s), aux = source
     Daily = 9,    // f0 do_min, f1 do_avg, f2 do_max, f3 temp_avg; aux = minute_of_min | level_max << 16 | events << 24
     Service = 10, // aux = service event code | device << 8 | outcome << 16; f0 = response
+    Boost = 11,   // aux = boost event code; f0 = DO mg/L, f1 = target mg/L
 };
 
 constexpr std::size_t RECORD_SIZE = 40;

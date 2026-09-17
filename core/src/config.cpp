@@ -341,6 +341,7 @@ LoadResult Load(std::string_view pJson, Config& pOut, const Config& pBase)
         r.Flag(d, "ack_silences", p.of(prefix, "ack_silences"), cfg.ladder.devices[i].ackSilences);
         r.Number(d, "service_s", p.of(prefix, "service_s"), cfg.devices[i].serviceS);
         r.Number(d, "min_response_pct", p.of(prefix, "min_response_pct"), cfg.devices[i].minResponsePct);
+        r.Flag(d, "boost", p.of(prefix, "boost"), cfg.boost.devices[i]);
     }
 
     const JsonObjectConst service = r.Object(root, "service", "service");
@@ -364,6 +365,23 @@ LoadResult Load(std::string_view pJson, Config& pOut, const Config& pBase)
     r.Flag(service, "chirp", "service.chirp", cfg.service.chirp);
     r.Number(service, "induce_deficit_s", "service.induce_deficit_s", cfg.service.induceDeficitS);
     r.Number(service, "induce_deficit_device", "service.induce_deficit_device", cfg.service.induceDeficitDevice);
+
+    const JsonObjectConst boost = r.Object(root, "boost", "boost");
+    r.Flag(boost, "enabled", "boost.enabled", cfg.boost.enabled);
+    const JsonVariantConst bwindow = boost["window"];
+    if(!bwindow.isNull())
+    {
+        if(!bwindow.is<JsonArrayConst>() || bwindow.as<JsonArrayConst>().size() != 2)
+        {
+            r.Fail(LoadError::WrongType, "boost.window", "expected [\"HH:MM\", \"HH:MM\"]");
+        }
+        else
+        {
+            r.Hhmm(bwindow[0], "boost.window[0]", cfg.boost.windowStartMin);
+            r.Hhmm(bwindow[1], "boost.window[1]", cfg.boost.windowEndMin);
+        }
+    }
+    r.Number(boost, "target_mgl", "boost.target_mgl", cfg.boost.targetMgl);
 
     const JsonObjectConst signals = r.Object(root, "signals", "signals");
     r.Number(signals, "buzzer_hz", "signals.buzzer_hz", cfg.signals.buzzerHz);
@@ -455,6 +473,9 @@ LoadResult Validate(const Config& pCfg)
         return Invalid("service", "the devices' service runs do not fit in the window");
 
     const SignalsConfig& sg = pCfg.signals;
+    if(pCfg.boost.windowStartMin >= pCfg.boost.windowEndMin) return Invalid("boost.window", "start must be before end");
+    if(pCfg.boost.targetMgl < 1.0f || pCfg.boost.targetMgl > 15.0f) return Invalid("boost.target_mgl", "must be 1..15");
+
     if(sg.buzzerHz < 200 || sg.buzzerHz > 8000) return Invalid("signals.buzzer_hz", "must be 200..8000");
     if(sg.ledBrightness > 100) return Invalid("signals.led_brightness", "must be 0..100");
     if(sg.normal.buzzer != BuzzerPattern::Off) return Invalid("signals.normal.buzzer", "Normal is silent");
@@ -524,6 +545,7 @@ std::size_t Write(const Config& pCfg, std::span<char> pOut)
         d["ack_silences"] = l.devices[i].ackSilences;
         d["service_s"] = pCfg.devices[i].serviceS;
         d["min_response_pct"] = pCfg.devices[i].minResponsePct;
+        d["boost"] = pCfg.boost.devices[i];
     }
 
     JsonObject service = doc["service"].to<JsonObject>();
@@ -545,6 +567,15 @@ std::size_t Write(const Config& pCfg, std::span<char> pOut)
     correction["offset"] = pCfg.correction.offset;
     doc["salinity_psu"] = pCfg.salinityPsu;
     doc["allow_zero_cal"] = pCfg.allowZeroCal;
+
+    JsonObject boost = doc["boost"].to<JsonObject>();
+    boost["enabled"] = pCfg.boost.enabled;
+    JsonArray bwindow = boost["window"].to<JsonArray>();
+    FormatHhmm(pCfg.boost.windowStartMin, hhmm);
+    bwindow.add(std::string_view(hhmm));
+    FormatHhmm(pCfg.boost.windowEndMin, hhmm);
+    bwindow.add(std::string_view(hhmm));
+    boost["target_mgl"] = pCfg.boost.targetMgl;
 
     JsonObject signals = doc["signals"].to<JsonObject>();
     signals["buzzer_hz"] = pCfg.signals.buzzerHz;
