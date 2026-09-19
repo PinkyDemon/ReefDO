@@ -20,12 +20,25 @@
         "CMAKE_LINKER": "lld-link",
         "REEFDO_COVERAGE": "ON"
       }
+    },
+    {
+      "name": "linux-coverage",
+      "displayName": "clang + llvm-cov — the same 100 % coverage gate on Linux (CI)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/coverage",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "REEFDO_COVERAGE": "ON"
+      }
     }
   ],
   "buildPresets": [
     { "name": "msvc-debug",   "configurePreset": "msvc", "configuration": "Debug" },
     { "name": "msvc-release", "configurePreset": "msvc", "configuration": "Release" },
-    { "name": "coverage",     "configurePreset": "clang-coverage", "targets": [ "coverage" ] }
+    { "name": "coverage",     "configurePreset": "clang-coverage", "targets": [ "coverage" ] },
+    { "name": "linux-coverage", "configurePreset": "linux-coverage", "targets": [ "coverage" ] }
   ],
   "testPresets": [
     { "name": "msvc-debug", "configurePreset": "msvc", "configuration": "Debug", "output": { "outputOnFailure": true } }

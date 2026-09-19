@@ -2,6 +2,9 @@
 
 # ReefDO
 
+[![build](https://github.com/PinkyDemon/ReefDO/actions/workflows/build.yml/badge.svg)](https://github.com/PinkyDemon/ReefDO/actions/workflows/build.yml)
+[![release](https://img.shields.io/github/v/release/PinkyDemon/ReefDO?include_prereleases)](https://github.com/PinkyDemon/ReefDO/releases)
+
 Dissolved-oxygen failsafe for a small reef aquarium. A Rika RK500-04 optical DO probe (RS485 Modbus RTU) on a
 Waveshare ESP32-S3-Relay-6CH watches the water; when oxygen falls, an escalation ladder (Blue → Yellow → Red)
 switches up to six relay-connected devices (air pumps, powerheads, sirens), sounds the buzzer and can send a
@@ -33,6 +36,19 @@ push notification. Everything runs on the board: logging, web UI, WiFi, time, up
 - Relays are dry contacts; loads have their own power. Wire aeration to the **NC** contact so it runs when
   the controller is off.
 
+## Ready-made firmware
+
+Every tagged version is built on GitHub and published under [Releases](https://github.com/PinkyDemon/ReefDO/releases):
+
+- `reefdo-vX.Y.Z-flash.bin` — a complete image for a new board. Connect the USB-C port and write it at 0x0 with
+  [esptool](https://docs.espressif.com/projects/esptool/): `esptool --chip esp32s3 write-flash 0x0 reefdo-vX.Y.Z-flash.bin`
+- `reefdo-vX.Y.Z-ota.bin` — the update image. Maintenance → OTA upload on the web page, or `POST /api/ota`.
+  The board reboots into the new image and rolls back by itself if it does not come up.
+
+Every push runs the tests and the coverage gate on Linux, the MSVC build on Windows and the firmware build
+(`.github/workflows/build.yml`); a `v*` tag matching `core/include/reefdo/version.hpp` publishes a release
+(`release.yml`).
+
 ## Build
 
 Host side (the core library and its tests): Visual Studio 2026 with the C++ workload (cl, clang-cl,
@@ -44,7 +60,8 @@ tools\vsenv.cmd cmake --build --preset msvc-debug
 tools\vsenv.cmd ctest --preset msvc-debug
 ```
 
-Coverage gate (clang-cl + llvm-cov; the build fails below 100 % lines and branches on `core/`):
+Coverage gate (clang-cl + llvm-cov; the build fails below 100 % lines and branches on `core/`; on Linux use the
+`linux-coverage` presets with clang, llvm and ninja installed):
 
 ```bat
 tools\vsenv.cmd cmake --preset clang-coverage

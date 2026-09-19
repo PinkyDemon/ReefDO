@@ -20,6 +20,8 @@ Facts an agent needs to work in this repository. The README covers usage; this c
 - 100 % line and branch coverage on `core/` is enforced by `cmake --build --preset coverage`; a change to the
   core is not done until that passes. A branch that cannot be tested is removed, not excluded.
 - Both host compilers must be warning-free: MSVC `/W4 /WX`, clang-cl and the Xtensa GCC `-Wall -Wextra -Werror`.
+- GitHub Actions (`.github/workflows/`) run the same gate on Linux clang, the MSVC build and the ESP-IDF build on
+  every push; a `v*` tag publishes a release and must equal `VERSION` in `core/include/reefdo/version.hpp`.
 - Relays must be de-energised before anything else runs at boot (`board::InitRelaysDeenergised` is the first
   call in `app_main`). NC wiring means de-energised = device on.
 - The ladder (`core/src/ladder.cpp`) decides device states, whether the buzzer may sound, and the LED colour;

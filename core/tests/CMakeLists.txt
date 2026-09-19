@@ -39,11 +39,16 @@ add_test(NAME reefdo_tests COMMAND reefdo_tests)
 
 if(REEFDO_COVERAGE)
   get_filename_component(_llvm_bin "${CMAKE_CXX_COMPILER}" DIRECTORY)
-  file(GLOB _profile_rt "${_llvm_bin}/../lib/clang/*/lib/windows/clang_rt.profile-x86_64.lib")
-  if(NOT _profile_rt)
-    message(FATAL_ERROR "clang_rt.profile-x86_64.lib not found next to ${CMAKE_CXX_COMPILER}")
+  if(WIN32)
+    # clang-cl does not pull the profile runtime in by itself
+    file(GLOB _profile_rt "${_llvm_bin}/../lib/clang/*/lib/windows/clang_rt.profile-x86_64.lib")
+    if(NOT _profile_rt)
+      message(FATAL_ERROR "clang_rt.profile-x86_64.lib not found next to ${CMAKE_CXX_COMPILER}")
+    endif()
+    target_link_libraries(reefdo_tests PRIVATE ${_profile_rt})
+  else()
+    target_link_options(reefdo_tests PRIVATE -fprofile-instr-generate)
   endif()
-  target_link_libraries(reefdo_tests PRIVATE ${_profile_rt})
 
   # `cmake --build --preset coverage` runs the tests instrumented, merges the profile,
   # writes coverage/report.txt + coverage/html/, and fails unless core/src is at

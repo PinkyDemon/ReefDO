@@ -1,0 +1,51 @@
+name: build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  core:
+    name: core tests + 100 % coverage gate (clang)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang, llvm-cov, ninja
+        run: sudo apt-get update && sudo apt-get install -y clang llvm ninja-build
+      - name: Configure
+        run: cmake --preset linux-coverage
+      - name: Test under llvm-cov, gate at 100 % lines and branches
+        run: cmake --build --preset linux-coverage
+      - name: Coverage report
+        if: always()
+        run: cat out/coverage/coverage/report.txt || true
+
+  core-msvc:
+    name: core tests (MSVC /W4 /WX)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B out/msvc -G "Visual Studio 17 2022" -A x64
+      - name: Build
+        run: cmake --build out/msvc --config Debug
+      - name: Test
+        run: ctest --test-dir out/msvc -C Debug --output-on-failure
+
+  firmware:
+    name: firmware (ESP-IDF v6.1, esp32s3)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v6.1
+          target: esp32s3
+          path: firmware
+      - name: Upload OTA image
+        uses: actions/upload-artifact@v4
+        with:
+          name: reefdo-ota-${{ github.sha }}
+          path: firmware/build/reefdo.bin

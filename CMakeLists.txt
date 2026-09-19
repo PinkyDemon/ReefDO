@@ -20,7 +20,7 @@ endif()
 
 if(REEFDO_COVERAGE)
   if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    message(FATAL_ERROR "REEFDO_COVERAGE needs clang-cl (use the clang-coverage preset from a VS developer shell)")
+    message(FATAL_ERROR "REEFDO_COVERAGE needs clang (presets clang-coverage on Windows, linux-coverage elsewhere)")
   endif()
   add_compile_options(-fprofile-instr-generate -fcoverage-mapping)
 endif()

@@ -1,0 +1,48 @@
+name: release
+
+# Push a tag like v1.0.0 (or v1.0.0-rc4): builds the firmware, checks the tag against
+# core/include/reefdo/version.hpp and publishes the images on a GitHub release.
+on:
+  push:
+    tags: [ 'v*' ]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag must match version.hpp
+        run: |
+          v=$(sed -n 's/.*VERSION = "\([^"]*\)".*/\1/p' core/include/reefdo/version.hpp)
+          if [ "v$v" != "${GITHUB_REF_NAME}" ]; then
+            echo "tag ${GITHUB_REF_NAME} but version.hpp says $v"; exit 1
+          fi
+
+      - name: Build firmware and the single-file flash image
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v6.1
+          target: esp32s3
+          path: firmware
+          command: idf.py build merge-bin
+
+      - name: Collect release files
+        run: |
+          mkdir -p dist
+          cp firmware/build/reefdo.bin            dist/reefdo-${GITHUB_REF_NAME}-ota.bin
+          cp firmware/build/merged-binary.bin     dist/reefdo-${GITHUB_REF_NAME}-flash.bin
+          (cd dist && sha256sum *.bin > SHA256SUMS.txt)
+          ls -l dist
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pre=""; case "${GITHUB_REF_NAME}" in *-*) pre="--prerelease";; esac
+          gh release create "${GITHUB_REF_NAME}" dist/* --title "ReefDO ${GITHUB_REF_NAME}" --generate-notes $pre \
+            --notes "**reefdo-…-ota.bin** — upload on the Maintenance page (or POST to /api/ota) to update a running board.
+          **reefdo-…-flash.bin** — complete image for a new board: \`esptool --chip esp32s3 write-flash 0x0 reefdo-${GITHUB_REF_NAME}-flash.bin\`"
