@@ -7,6 +7,8 @@ Waveshare ESP32-S3-Relay-6CH watches the water; when oxygen falls, an escalation
 switches up to six relay-connected devices (air pumps, powerheads, sirens), sounds the buzzer and can send a
 push notification. Everything runs on the board: logging, web UI, WiFi, time, updates. No server, no cloud.
 
+![24 hours of a 90-litre reef: the night dive into Blue and Yellow, the morning recovery under the lights](assets/screenshot_chart.jpg)
+
 ## What it does
 
 - Reads DO, saturation and temperature every 10 s and logs every sample (15 days full resolution, 1.7 years
@@ -20,6 +22,8 @@ push notification. Everything runs on the board: logging, web UI, WiFi, time, up
   so the tank starts the night with a full buffer.
 - Web UI (status, chart, events, service history, configuration, maintenance, export, setup), USB console,
   OTA updates with automatic rollback, optional push through ntfy.sh.
+
+![Status page: live values, the ladder with its thresholds, tonight's plan and the six devices](assets/screenshot_main.jpg)
 
 ## Hardware
 
@@ -84,6 +88,10 @@ Every setting on the Config page has a tooltip.
   device failed its last check.
 - **BOOT button**: short press = acknowledge, hold 3 s = maintenance on/off.
 
+| ![Events](assets/screenshot_log.jpg) | ![Config](assets/screenshot_config.jpg) |
+|:--:|:--:|
+| Events: every level change, service step and boot with its value | Config: every setting with a tooltip; saved and applied in one step |
+
 ### Console
 
 | Command | |
@@ -127,7 +135,7 @@ Reads are open; writes need Basic auth (`reef` / your password), e.g. `curl -u r
 core/       hardware-independent C++23 library (modbus, probe, filters, ladder, service, boost, log, config, api, app, sim)
   tests/    Catch2 tests, property tests, scenario runner on the virtual tank
 firmware/   ESP-IDF project: main/ (board, hal/, sampler, indicator, console, net, web + www/, notify)
-assets/     the logo (SVG, embedded in the firmware and served at /logo.svg; www/apple-touch-icon.png is its 180 px iOS render)
+assets/     logo (SVG, embedded in the firmware and served at /logo.svg) and README screenshots
 third_party/  Catch2, ArduinoJson (vendored)
 tools/      vsenv.cmd, idfenv.cmd, idf-shell.ps1, format.cmd
 ```
