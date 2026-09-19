@@ -10,7 +10,7 @@ jobs:
     name: core tests + 100 % coverage gate (clang)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install clang, llvm-cov, ninja
         run: sudo apt-get update && sudo apt-get install -y clang llvm ninja-build
       - name: Configure
@@ -23,21 +23,21 @@ jobs:
 
   core-msvc:
     name: core tests (MSVC /W4 /WX)
-    runs-on: windows-latest
+    runs-on: windows-2025-vs2026 # the same VS 2026 toolset as the msvc preset
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Configure
-        run: cmake -S . -B out/msvc -G "Visual Studio 17 2022" -A x64
+        run: cmake --preset msvc
       - name: Build
-        run: cmake --build out/msvc --config Debug
+        run: cmake --build --preset msvc-debug
       - name: Test
-        run: ctest --test-dir out/msvc -C Debug --output-on-failure
+        run: ctest --preset msvc-debug
 
   firmware:
     name: firmware (ESP-IDF v6.1, esp32s3)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Build
         uses: espressif/esp-idf-ci-action@v1
         with:
@@ -45,7 +45,7 @@ jobs:
           target: esp32s3
           path: firmware
       - name: Upload OTA image
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: reefdo-ota-${{ github.sha }}
           path: firmware/build/reefdo.bin
