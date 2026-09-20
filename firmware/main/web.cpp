@@ -389,6 +389,20 @@ esp_err_t PostBuzzerTest(httpd_req_t* pReq)
     return SendJson(pReq, static_cast<std::size_t>(n));
 }
 
+// Form-encoded muted=1|0: bench mute of every alarm tone, persisted in NVS.
+esp_err_t PostMute(httpd_req_t* pReq)
+{
+    if(!Authorised(pReq)) return ESP_OK;
+    std::size_t len = 0;
+    if(!ReadBody(pReq, len)) return ESP_OK;
+    char value[8] = {};
+    const bool ok = httpd_query_key_value(sBody, "muted", value, sizeof value) == ESP_OK;
+    if(ok) indicator::SetMuted(std::atoi(value) != 0);
+    const int n = std::snprintf(sJson, sizeof sJson, "{\"ok\":%s,\"muted\":%s}", ok ? "true" : "false",
+                               indicator::Muted() ? "true" : "false");
+    return SendJson(pReq, static_cast<std::size_t>(n));
+}
+
 void RestartLater(void*)
 {
     esp_restart();
@@ -484,6 +498,7 @@ void Start()
     Add("/api/passwd", HTTP_POST, PostPassword);
     Add("/api/ntfy-test", HTTP_POST, PostNtfyTest);
     Add("/api/buzzer-test", HTTP_POST, PostBuzzerTest);
+    Add("/api/mute", HTTP_POST, PostMute);
     Add("/api/ota", HTTP_POST, PostOta);
     Add("/api/*", HTTP_OPTIONS, Options);
     ESP_LOGI(TAG, "http://reefdo.local/ up");

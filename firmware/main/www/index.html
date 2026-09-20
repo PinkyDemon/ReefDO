@@ -21,6 +21,7 @@
 *{box-sizing:border-box}
 [hidden]{display:none!important}
 .tip{cursor:help;text-decoration:underline dotted var(--muted);text-underline-offset:3px}
+.mutebadge{position:fixed;left:10px;bottom:10px;font:600 11px/1 var(--mono);letter-spacing:.1em;background:var(--red);color:#fff;padding:5px 8px;border-radius:6px;opacity:.9;z-index:6}
 .simbadge{position:fixed;right:10px;bottom:10px;font:600 11px/1 var(--mono);letter-spacing:.1em;background:var(--yellow);color:#000;padding:5px 8px;border-radius:6px;opacity:.9;z-index:6}
 html,body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 a{color:inherit}
@@ -187,7 +188,7 @@ h2{font-size:16px;margin:18px 0 10px}
 <section id="chart">
   <div class="card">
     <div class="row" style="justify-content:space-between">
-      <div class="seg" id="range"><button data-r="1h">1 h</button><button class="on" data-r="24h">24 h</button><button data-r="7d">7 d</button><button data-r="90d">90 d</button></div>
+      <div class="seg" id="range"><button data-r="1h">1 h</button><button data-r="6h">6 h</button><button data-r="12h">12 h</button><button class="on" data-r="24h">24 h</button><button data-r="7d">7 d</button><button data-r="90d">90 d</button></div>
       <label class="c"><input type="checkbox" id="showtemp"> temperature</label>
     </div>
     <div class="chartwrap" style="margin-top:10px">
@@ -195,7 +196,7 @@ h2{font-size:16px;margin:18px 0 10px}
       <div class="readout" id="readout"></div>
     </div>
     <div class="legend" id="legend"></div>
-    <div class="note">1 h: every 10-s sample, 24 h: every third one (tier A). 7 d / 90 d: 5-minute min–max band and average (tier B). Thresholds are drawn with their hysteresis bands.</div>
+    <div class="note">1 h / 6 h: every 10-s sample, 12 h: every second, 24 h: every third one (tier A). 7 d / 90 d: 5-minute min–max band and average (tier B). Thresholds are drawn with their hysteresis bands.</div>
   </div>
 </section>
 
@@ -329,6 +330,7 @@ h2{font-size:16px;margin:18px 0 10px}
       <label class="f" title="How long to play">seconds <input id="bt-s" value="4"></label>
     </div>
     <div class="row" style="margin-top:10px"><button class="btn" onclick="buzzerTest()">Play</button><span class="note" style="margin:0">Plays even while the buzzer is muted. Pick what you like, then set it per state above.</span></div>
+    <div class="row" style="margin-top:10px"><label class="c" title="Silences every alarm tone until switched back. Devices, LED and notifications keep working. For bench work only — a muted failsafe cannot wake you."><input type="checkbox" id="mute-toggle" onchange="setMute(this.checked)"> mute the buzzer (all alarms silent)</label></div>
   </div>
 
   <div class="card">
@@ -412,6 +414,7 @@ h2{font-size:16px;margin:18px 0 10px}
 
 <div class="toast" id="toast"></div>
 <div class="simbadge" id="simbadge" hidden>SIMULATED TANK · NO SENSOR</div>
+<div class="mutebadge" id="mutebadge" hidden>BUZZER MUTED</div>
 <script>
 // ---------- helpers ----------
 const $=id=>document.getElementById(id);
@@ -500,10 +503,12 @@ async function refreshWifi(){
   $('wifi').textContent='📶 '+(w.connected?w.rssi+' dBm':w.ap?'setup AP':'—');
   $('sys-wifi').textContent=w.connected?w.ssid+' · '+w.rssi+' dBm · '+w.ip:(w.ap?'setup AP reefdo-setup (192.168.4.1)':'connecting to '+w.ssid);
   $('simbadge').hidden=w.probe!=='sim';
+  $('mutebadge').hidden=!w.muted; $('mute-toggle').checked=!!w.muted;
   $('cfgwarn').hidden=!w.config||w.config==='stored'; $('cfgwarn').textContent=w.config==='defaults'?'Factory defaults are active: no device is assigned yet. Set the devices on the Config page and Save.':'The stored configuration was '+w.config+' — the board runs on factory defaults until you Save a valid one.';
   $('sys-push').textContent=CFG&&CFG.ntfy.enabled?('sent '+w.ntfy_sent+' · failed '+w.ntfy_failed):'off';
 }
 function ack(){ cmd({ack:true},'Acknowledged'); }
+async function setMute(pOn){ try{ const r=await sendForm('/api/mute',{muted:pOn?1:0}); toast(r.ok?(r.muted?'Buzzer muted':'Buzzer live'):'Rejected'); }catch(e){ toast('Failed: '+e.message); } refreshWifi(); }
 async function toggleMaint(){ const on=!(ST&&ST.ladder.maintenance); await cmd({maintenance:on},on?'Maintenance mode for 30 min — buzzer muted':'Back to normal operation'); }
 async function pushTime(quiet){ try{ await sendJ('/api/cmd',{time:{unix:Math.floor(Date.now()/1000),tz:tzHere()}}); if(!quiet) toast('Board clock set from this browser'); refresh(); }catch(e){ if(!quiet) toast('Failed: '+e.message); } }
 
@@ -516,9 +521,9 @@ const cache={};
 async function drawChart(){
   if(!CFG) await loadConfig(true);
   if(!ST||!ST.clock_known){ toast('The board has no clock yet: no chart'); return; }
-  const days=range==='1h'?1/24:range==='24h'?1:range==='7d'?7:90;
+  const days=range==='1h'?1/24:range==='6h'?0.25:range==='12h'?0.5:range==='24h'?1:range==='7d'?7:90;
   const now=ST.unix, t0=now-Math.round(days*86400);
-  const url=days<=1?`/api/series?tier=A&from=${t0}&to=${now}&every=${days<1?1:3}`:`/api/series?tier=B&from=${t0}&to=${now}&every=${days===7?1:6}`;
+  const url=days<=1?`/api/series?tier=A&from=${t0}&to=${now}&every=${days<=0.25?1:days<1?2:3}`:`/api/series?tier=B&from=${t0}&to=${now}&every=${days===7?1:6}`;
   let data; try{ data=csv(await (await api(url)).text()); }catch(e){ toast('Series failed: '+e.message); return; }
   const cv=$('cv'), dpr=window.devicePixelRatio||1, W=cv.clientWidth, H=360; cv.width=W*dpr; cv.height=H*dpr; const c=cv.getContext('2d'); c.scale(dpr,dpr);
   const showT=$('showtemp').checked, L=showT?40:12, R=46, T=12, B=40, w=W-L-R, h=H-T-B;
@@ -535,8 +540,7 @@ async function drawChart(){
   for(const [k,lv] of Object.entries(TH)){ const v=lv.mgl, hy=lv.hysteresis; c.fillStyle=css('--'+k); c.globalAlpha=.10; c.fillRect(L,Y(v+hy),w,Y(v-hy)-Y(v+hy)); c.globalAlpha=1; c.strokeStyle=css('--'+k); c.setLineDash([5,4]); c.lineWidth=1; c.beginPath(); c.moveTo(L,Y(v)); c.lineTo(L+w,Y(v)); c.stroke(); c.setLineDash([]); c.fillStyle=css('--'+k); c.font='11px system-ui'; c.fillText(v.toFixed(1),L+4,Y(v)-3); }
   c.strokeStyle=css('--line'); c.lineWidth=1; c.fillStyle=css('--muted'); c.font='11px system-ui';
   for(let v=Math.ceil(ymin*2)/2; v<=ymax; v+=0.5){ c.beginPath(); c.moveTo(L,Y(v)); c.lineTo(L+w,Y(v)); c.globalAlpha=.4; c.stroke(); c.globalAlpha=1; c.fillText(v.toFixed(1),L+w+6,Y(v)+4); }
-  if(days<1){ for(let m=0;m<=60;m+=10){ const t=t0+m*60; const d=new Date(t*1000); c.fillText(pad(d.getHours())+':'+pad(d.getMinutes()),X(t)-14,H-B+16);} }
-  else if(days===1){ for(let hh=0;hh<=24;hh+=3){ const t=t0+hh*3600; const d=new Date(t*1000); c.fillText(pad(d.getHours())+':'+pad(d.getMinutes()),X(t)-14,H-B+16);} }
+  if(days<=1){ const stepMin=days<0.1?10:days<=0.25?60:days<=0.5?120:180; for(let m=0;m<=days*1440;m+=stepMin){ const t=t0+m*60; const d=new Date(t*1000); c.fillText(pad(d.getHours())+':'+pad(d.getMinutes()),X(t)-14,H-B+16);} }
   else { const step=days===7?1:15; for(let d=days; d>=0; d-=step){ const t=now-d*86400; c.fillText(new Date(t*1000).toLocaleDateString('en-GB',{day:'2-digit',month:'short'}),X(t)-18,H-B+16);} }
   if(!data.length){ c.fillText('no data in this range yet',L+10,T+20); return; }
   if(days<=1){

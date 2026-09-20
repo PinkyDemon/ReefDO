@@ -97,7 +97,7 @@ Every setting on the Config page has a tooltip.
 
 - **Status**: live values, level, devices, service state. **Acknowledge** silences the buzzer and any
   ack-silenced device for a while; it never lowers the level.
-- **Chart**: 1 h / 24 h / 7 d / 90 d with thresholds, night hours, and event markers (hover them).
+- **Chart**: 1 h / 6 h / 12 h / 24 h / 7 d / 90 d with thresholds, night hours, and event markers (hover them).
 - **Maintenance**: mutes the buzzer for 30 min and enables relay tests, air calibration and OTA upload.
 - **Export**: CSV of everything, incrementally since the last export.
 - **LED**: green steady = OK online, green blinking = OK offline, blue 1 Hz / yellow 2 Hz / red 4 Hz =
@@ -133,7 +133,7 @@ Reads are open; writes need Basic auth (`reef` / your password), e.g. `curl -u r
 | `PUT /api/config` | full or partial document, validated |
 | `POST /api/cmd` | `{"ack":true}` · `{"maintenance":b}` · `{"service":"run"}` · `{"cal":"air"}` · `{"relay":{"device":n,"on":b\|null}}` · `{"time":{"unix":s,"tz":s}}` |
 | `GET /api/series?tier=A\|B&from&to&every` · `/api/events?since` · `/api/export.csv?since` | CSV |
-| `POST /api/wifi` · `/api/passwd` · `/api/ota` · `/api/ntfy-test` · `/api/buzzer-test` | |
+| `POST /api/wifi` · `/api/passwd` · `/api/ota` · `/api/ntfy-test` · `/api/buzzer-test` · `/api/mute` | |
 
 ## Configuration keys
 
