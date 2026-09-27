@@ -37,7 +37,7 @@ struct Record
     uint32_t ts = 0; // unix seconds, 0 = clock unknown when written
     uint32_t uptimeS = 0;
     Type type = Type::Measurement;
-    uint8_t level = 0; // effective ladder level
+    uint8_t level = 0; // the ladder level (what the readings supported)
     uint16_t flags = 0;
     float f0 = 0.0f; // Measurement: do (corrected, mg/L)
     float f1 = 0.0f; // Measurement: saturation %

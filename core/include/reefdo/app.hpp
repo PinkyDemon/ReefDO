@@ -96,7 +96,8 @@ enum MeasurementFlag : uint16_t
 //   (f0 = result),
 //   4 out of order (| device << 8, f0 = seconds), 5 back in order (| device << 8, f1 = 0 command, 1 time ran out),
 //   6 manual on / 7 manual off / 8 back to automatic (| device << 8; 8: f1 = 0 command, 1 a schedule or trigger
-//   took over, 2 an exclusive test started), 9 plug lost (| device << 8, f0 = tuya::Error), 10 plug back
+//   took over, 2 an exclusive test started), 9 plug lost (| device << 8, f0 = tuya::Error), 10 plug back,
+//   11 a failed test verdict cleared by hand (| device << 8)
 // Test records: aux = event type | device << 8 | outcome << 16 | skip << 24, flags = judged 1 | clock unknown 2
 //   | aborted 4 | high DO 8 (a missed response let off: f1 = DO at the device's start, f2 = the limit)
 // Ladder event records: aux = ladder::EventType, flags = from | to << 8, aux device in bits 8..15 for Pulse
@@ -110,7 +111,6 @@ struct Status
     probe::Status probe = probe::Status::Timeout;
     uint32_t consecutiveFailures = 0;
     ladder::Level level = ladder::Level::Normal;
-    ladder::Level effective = ladder::Level::Normal;
     bool fault = false;
     bool silenced = false;
     bool heat = false;
@@ -157,11 +157,13 @@ public:
     // whatever wants it on, alerts included. 0 puts it back in order.
     bool SuspendDevice(std::size_t pDevice, uint32_t pSeconds, const Clock& pClock);
     // Manual switch: on or off by hand, nullopt = back to automatic. It holds until the next scheduled or triggered
-    // change — the device's demands change (a window opens or closes, the test reaches it...), the effective level
+    // change — the device's demands change (a window opens or closes, the test reaches it...), the level or FAULT
     // changes, or an exclusive test starts — and is refused while an exclusive test runs. Device maintenance still
     // wins.
     bool SetManual(std::size_t pDevice, std::optional<bool> pState, const Clock& pClock);
     probe::CalResult AirCalibrate(const Clock& pClock); // maintenance only
+    // Clears a device's failed test verdict by hand. The verdict is only shown and pushed; nothing runs because of it.
+    bool ClearFailure(std::size_t pDevice, const Clock& pClock);
     // The Tuya task's result for one transaction with a plug. False if that slot is not a plug.
     bool ReportTuya(std::size_t pDevice, tuya::Error pError, const Clock& pClock);
 
@@ -248,7 +250,6 @@ private:
     uint64_t mLastUnixAtMs = 0;
     std::optional<uint32_t> mCorrectionLoggedDay;
     uint64_t mLastAlertNotifyMs = 0;
-    ladder::Level mLastNotifiedLevel = ladder::Level::Normal;
 };
 
 } // namespace reefdo::app

@@ -273,7 +273,7 @@ h2{font-size:16px;margin:18px 0 10px}
       <label class="f">no FAIL from a start at or above (mg/L, 0 = off) <input data-k="test.no_fail_above_mgl"></label>
     </div>
     <div class="row" style="margin-top:10px">
-      <label class="c"><input type="checkbox" data-k="escalate_if_failed"> escalate one level deeper if a device failed its check</label>
+
       <label class="c"><input type="checkbox" data-k="test.chirp"> chirp at start</label>
       <label class="c"><input type="checkbox" data-k="test.exclusive" onchange="exclusiveUi()"> exclusive: only the tested device runs (needed for the checks)</label>
     </div>
@@ -472,7 +472,7 @@ nav.addEventListener('click',e=>{ if(e.target.tagName==='A'){ e.preventDefault()
 // ---------- status ----------
 let ST=null, CFG=null, WIFI=null;
 function pill(el,s){
-  const maint=s.ladder.maintenance, fault=s.ladder.fault, lv=s.ladder.effective;
+  const maint=s.ladder.maintenance, fault=s.ladder.fault, lv=s.ladder.level;
   el.className='pill '+(maint?'lv-maint':fault?'lv-fault':'lv-'+lv);
   el.innerHTML='<span class="dot"></span>'+(maint?'MAINTENANCE · '+fmtLeft(s.ladder.maintenance_s):fault?'FAULT':lv.toUpperCase())+(s.ladder.silenced?' · silenced':'');
 }
@@ -487,10 +487,11 @@ function devCard(d,i){
     <div class="st"><span>${state}${d.pulse?' · pulse':''}</span><span>${outputText(d)}</span></div>
     <div class="st"><span>${out?'<b style="color:var(--red)">'+fmtLeft(d.suspend_s)+' left</b>'+(why?' · wanted: '+why:''):m===false?'off by hand'+(why?' · wanted: '+why:''):(why||'—')}</span></div>
     ${man?`<div class="st" style="justify-content:flex-start" title="Manual control: until the next scheduled or triggered change">${man}</div>`:''}
-    <div class="st"><span>${d.failed?'<b style="color:var(--red)">test FAIL</b>':(d.test_s?'test '+d.test_s+' s':'not tested')}</span></div></div>`;
+    <div class="st"><span>${d.failed?`<b style="color:var(--red)">test FAIL</b> <button class="btn sm" title="The verdict is only shown; clear it once the device is fixed or the failure was a false one" onclick="clearFail(${i+1})">clear</button>`:(d.test_s?'test '+d.test_s+' s':'not tested')}</span></div></div>`;
 }
 function outputText(d){ const s=d.slot||{}; return s.type==='relay'?'relay '+s.channel+' · '+s.wiring+(d.energised?' · coil on':''):s.type==='tuya'?plugState(d.link||{}):'no output'; }
 function plugState(t){ return t.state==='lost'?`<b style="color:var(--red)" title="${t.error}">plug LOST</b>`:t.state==='ok'?'plug':`<span title="${t.error}">plug …</span>`; }
+async function clearFail(n){ await cmd({clear:{device:n}},'Device '+n+': test failure cleared'); }
 async function manual(n,on){ await cmd({manual:{device:n,on:on}},on===null?'Device '+n+' automatic':'Device '+n+(on?' on':' off')+' until the next scheduled or triggered change'); }
 const SUS_MIN={};
 function devMaint(){
@@ -516,7 +517,7 @@ async function refresh(){
   $('th-blue').textContent='< '+l.enters_below.blue.toFixed(2)+' · leaves > '+l.leaves_above.blue.toFixed(2);
   $('th-yellow').textContent='< '+l.enters_below.yellow.toFixed(2)+' · leaves > '+l.leaves_above.yellow.toFixed(2);
   $('th-red').textContent='< '+l.enters_below.red.toFixed(2)+' · leaves > '+l.leaves_above.red.toFixed(2);
-  const alarm=l.effective!=='normal'||l.fault;
+  const alarm=l.level!=='normal'||l.fault;
   $('ackbtn').disabled=!alarm||l.silenced; $('acknote').textContent=alarm?(l.silenced?'silenced':'silences the buzzer and ack devices for a while; the level stays'):'nothing to acknowledge';
   $('svc-window').textContent=s.test.window_start+' – '+s.test.window_end;
   $('svc-state').textContent=s.test.running?('running · device '+s.test.device+' · '+s.test.phase):'idle'+(s.test.inconclusive_alert?' · inconclusive streak':'')+(s.test.exclusive?'':' · checks off (not exclusive)');
@@ -615,7 +616,7 @@ async function drawChart(){
       else if(boostStart!=null){ c.fillStyle=css('--cyan'); c.globalAlpha=.25; c.fillRect(X(boostStart),T,Math.max(2,x-X(boostStart)),h); c.globalAlpha=1; c.fillStyle=css('--cyan'); c.fillText('boost',X(boostStart)+2,T+11); marks.push({x:X(boostStart),text:fmtTime(boostStart)+'  Boost start'}); marks.push({x,text:fmtTime(r.ts)+'  '+describe(r)[1]+' · '+describe(r)[2]}); boostStart=null; }
       continue; }
     if(r.type===2){ const t=r.aux&255;
-      if(t===1){ const to=LEVEL[(r.flags>>8)&255]; mark(x,'--'+(to==='normal'?'green':to),'',r); }
+      if(t===0){ const to=LEVEL[(r.flags>>8)&255]; mark(x,'--'+(to==='normal'?'green':to),'',r); }
       else if(t===2) mark(x,'--purple','!',r);
       else if(t===4) mark(x,'--muted','A',r);
       continue; }
@@ -640,7 +641,7 @@ async function drawChart(){
 
 // ---------- events ----------
 const TYPE={3:'Boot',4:'Fault',5:'Config',6:'Correction',7:'Command',8:'TimeSync',9:'Daily'};
-const LADDER_EV=['Level','Effective level','FAULT','FAULT cleared','Ack','Pulse off','Heat on','Heat off'];
+const LADDER_EV=['Level','Effective level (1.0)','FAULT','FAULT cleared','Ack','Pulse off','Heat on','Heat off'];
 const SVC_EV=['Test start','Device start','Device end','Test end','Test skipped','Test FAIL','Test fail cleared','Test inconclusive'];
 const BOOST_EV=['Boost start','Boost target reached','Boost window end','Boost paused'];
 const OUTCOME=['—','pass','FAIL','inconclusive','unchecked'];
@@ -672,6 +673,7 @@ function describe(r){
     if(t===8) return ['system','Automatic again · '+dev(d), ['by command','a schedule or trigger took over','a test started'][r.f1|0]||''];
     if(t===9) return ['fail','Plug lost · '+dev(d), ['','no connection','send failed','no answer','unreadable answer','wrong key','refused','crypto failure'][r.f0|0]||''];
     if(t===10) return ['system','Plug back · '+dev(d), ''];
+    if(t===11) return ['system','Test failure cleared by hand · '+dev(d), ''];
     if(t===2) return ['system','Maintenance off', ['by command','its 30 min ran out'][r.f1|0]||''];
     return ['system',t===1?'Maintenance on':'Command air calibration',''];
   }
@@ -698,7 +700,7 @@ async function loadTest(){
   $('svc-win2').textContent=(ST?ST.test.window_start+' – '+ST.test.window_end:'')+(s.running?' · running':'');
   $('svc-note').textContent='Starts at the first sample inside the window with at least '+CFG.test.min_headroom_pct+' % headroom from 100 %; otherwise at the end, inconclusive.'+(s.no_fail_above_mgl>0?' A device that misses its response after starting at or above '+s.no_fail_above_mgl.toFixed(2)+' mg/L is unchecked, not FAIL.':'')+(s.inconclusive_alert?' Inconclusive '+s.inconclusive_streak+' evenings running.':'');
   $('svc-dur').textContent='a run takes '+Math.round(s.run_duration_s/60)+' min';
-  document.querySelector('#svctable tbody').innerHTML=s.devices.map((d,i)=>d.test_s?`<tr><td>${i+1} · ${d.name}</td><td>${d.last_response.toFixed(1)} %</td><td style="color:var(${d.last_outcome==='fail'?'--red':d.last_outcome==='pass'?'--green':'--muted'})">${d.last_outcome}${d.fail_active?' · alert active':''}</td></tr>`:'').join('')||'<tr><td class="muted">no device has test_s &gt; 0</td></tr>';
+  document.querySelector('#svctable tbody').innerHTML=s.devices.map((d,i)=>d.test_s||d.fail_active?`<tr><td>${i+1} · ${d.name}</td><td>${d.last_response.toFixed(1)} %</td><td style="color:var(${d.last_outcome==='fail'?'--red':d.last_outcome==='pass'?'--green':'--muted'})">${d.last_outcome}${d.fail_active?' · FAIL active':''}</td><td>${d.fail_active?`<button class="btn sm" onclick="clearFail(${i+1}).then(loadTest)">Clear</button>`:''}</td></tr>`:'').join('')||'<tr><td class="muted">no device has test_s &gt; 0</td></tr>';
   $('svc-last').textContent=s.devices.some(d=>d.fail_active)?'FAIL active':s.devices.some(d=>d.last_outcome==='pass')?'pass':'—';
   if(!EVENTS.length) await loadEvents();
   document.querySelector('#svchist tbody').innerHTML=EVENTS.filter(r=>r.type===10).slice().reverse().slice(0,60).map(r=>{ const t=r.aux&255,d=(r.aux>>8)&255,o=(r.aux>>16)&255; return `<tr><td class="mono muted">${r.ts?fmtTime(r.ts):'boot+'+r.uptime_s+' s'}</td><td>${SVC_EV[t]}</td><td>${[1,2,5,6].includes(t)?(d+1)+' · '+(CFG.devices[d+1]?CFG.devices[d+1].name:''):''}</td><td>${t===2||t===5?r.f0.toFixed(1)+' %':''}</td><td>${t===2?OUTCOME[o]+highDo(r):t===4?SKIP[(r.aux>>24)&255]||'':''}</td></tr>`; }).join('');
@@ -726,7 +728,7 @@ const TIPS={
  'test.inconclusive_days':'Alert after this many evenings without a usable check.',
  'test.induce_deficit_s':'Optional: before the check, cut one device for this many seconds to create a small oxygen deficit so the check has something to measure. 0 = off.',
  'test.induce_deficit_device':'The device number to cut for the induced deficit — normally the return pump.',
- 'escalate_if_failed':'If a device failed its last check, an alert whose devices include it acts one level deeper — a Blue that relies on a dead bubbler becomes an audible Yellow.',
+
  'test.chirp':'Short beep when a test run starts.',
  'devices.*.boost':'Run this device during the boost.',
 

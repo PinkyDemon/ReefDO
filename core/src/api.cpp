@@ -119,14 +119,14 @@ std::size_t StatusJson(const app::App& pApp, const app::Clock& pClock, std::span
 
     JsonObject lad = doc["ladder"].to<JsonObject>();
     lad["level"] = config::Name(s.level);
-    lad["effective"] = config::Name(s.effective);
+
     lad["fault"] = s.fault;
     lad["silenced"] = s.silenced;
     lad["heat"] = s.heat;
     lad["maintenance"] = s.maintenance;
     lad["maintenance_s"] = s.maintenanceLeftS; // until it ends by itself; 0 when off
     // What the buzzer plays now: the configured pattern of the state shown, when the ladder lets it sound.
-    lad["buzzer"] = s.sound ? config::Name(c.signals.of(s.effective, s.fault).buzzer) : "off";
+    lad["buzzer"] = s.sound ? config::Name(c.signals.of(s.level, s.fault).buzzer) : "off";
     JsonObject th = lad["enters_below"].to<JsonObject>();
     th["blue"] = c.ladder.blue.mgl - c.ladder.blue.hysteresis;
     th["yellow"] = c.ladder.yellow.mgl - c.ladder.yellow.hysteresis;
@@ -302,6 +302,15 @@ Command ApplyCommand(app::App& pApp, std::string_view pJson, const app::Clock& p
         return cmd;
     }
 
+    const JsonVariantConst clear = root["clear"];
+    if(clear.is<JsonObjectConst>())
+    {
+        const std::optional<std::size_t> dev = DeviceIndex(clear, cmd);
+        if(!dev.has_value()) return cmd;
+        cmd.ok = pApp.ClearFailure(*dev, pClock);
+        cmd.message = "test failure cleared";
+        return cmd;
+    }
     const JsonVariantConst suspend = root["suspend"];
     if(suspend.is<JsonObjectConst>())
     {

@@ -11,10 +11,6 @@ constexpr uint64_t Ms(uint32_t pSeconds)
     return static_cast<uint64_t>(pSeconds) * 1000u;
 }
 
-Level Deeper(Level pL)
-{
-    return pL == Level::Red ? Level::Red : static_cast<Level>(static_cast<uint8_t>(pL) + 1);
-}
 Level Shallower(Level pL)
 {
     return static_cast<Level>(static_cast<uint8_t>(pL) - 1);
@@ -55,6 +51,7 @@ void UpdateFault(State& pS, const Input& pIn, const Config& pCfg, Output& pOut)
     if(pCfg.faultAlert && !pS.fault && pS.consecutiveFailures >= pCfg.faultConsecutiveFailures)
     {
         pS.fault = true;
+        pS.ackUntilMs.reset(); // a new alarm: an earlier ack does not cover it
         pOut.events.push_back({EventType::FaultEnter});
     }
 }
@@ -144,29 +141,15 @@ void UpdateLevel(State& pS, const Input& pIn, const Config& pCfg, Output& pOut)
     }
 }
 
-Level EffectiveLevel(const State& pS, const Input& pIn, const Config& pCfg)
+// The level whose devices run: the readings' level or, during a FAULT, fault.level when that is deeper.
+Level DevicesLevel(const State& pS, const Config& pCfg)
 {
-    Level eff = pS.level;
-    if(pCfg.escalateIfFailed && pS.level != Level::Normal)
-    {
-        for(std::size_t i = 0; i < DEVICES; ++i)
-        {
-            if(pIn.deviceFailed[i] && TriggerLevel(pCfg.devices[i].trigger) == pS.level)
-            {
-                eff = Deeper(pS.level);
-                break;
-            }
-        }
-    }
-    if(pS.fault)
-    {
-        Level fl = pCfg.faultLevel < Level::Yellow ? Level::Yellow : pCfg.faultLevel;
-        if(fl > eff) eff = fl;
-    }
-    return eff;
+    if(!pS.fault) return pS.level;
+    const Level fl = pCfg.faultLevel < Level::Yellow ? Level::Yellow : pCfg.faultLevel;
+    return fl > pS.level ? fl : pS.level;
 }
 
-void UpdateDevices(State& pS, const Input& pIn, const Config& pCfg, Level pEff, bool pSilenced, Output& pOut)
+void UpdateDevices(State& pS, const Input& pIn, const Config& pCfg, Level pAt, bool pSilenced, Output& pOut)
 {
     for(std::size_t i = 0; i < DEVICES; ++i)
     {
@@ -179,7 +162,7 @@ void UpdateDevices(State& pS, const Input& pIn, const Config& pCfg, Level pEff, 
         else
         {
             const std::optional<Level> tl = TriggerLevel(dc.trigger);
-            active = tl.has_value() && *tl <= pEff;
+            active = tl.has_value() && *tl <= pAt;
         }
 
         if(dc.mode == Mode::PulseOff)
@@ -203,7 +186,7 @@ void UpdateDevices(State& pS, const Input& pIn, const Config& pCfg, Level pEff, 
         else if(dc.ackSilences)
         {
             // Alarm device: Blue is silent, Ack silences, maintenance silences.
-            pOut.deviceOn[i] = active && pEff >= Level::Yellow && !pSilenced && !pIn.maintenance;
+            pOut.deviceOn[i] = active && pAt >= Level::Yellow && !pSilenced && !pIn.maintenance;
         }
         else
         {
@@ -241,14 +224,6 @@ Output Step(State& pS, const Input& pIn, const Config& pCfg)
     UpdateLevel(pS, pIn, pCfg, out);
     if(pCfg.nightLock && night && pS.level != Level::Normal) pS.nightArmed = true;
 
-    const Level eff = EffectiveLevel(pS, pIn, pCfg);
-    if(eff != pS.effective)
-    {
-        out.events.push_back({EventType::EffectiveChange, pS.effective, eff});
-        if(eff > pS.effective) pS.ackUntilMs.reset();
-        pS.effective = eff;
-    }
-
     if(pIn.ackPressed)
     {
         pS.ackUntilMs = pIn.nowMs + Ms(pCfg.ackSilenceS);
@@ -256,14 +231,13 @@ Output Step(State& pS, const Input& pIn, const Config& pCfg)
     }
     const bool silenced = pS.ackUntilMs.has_value() && pIn.nowMs < *pS.ackUntilMs;
 
-    UpdateDevices(pS, pIn, pCfg, eff, silenced, out);
+    UpdateDevices(pS, pIn, pCfg, DevicesLevel(pS, pCfg), silenced, out);
 
     out.level = pS.level;
-    out.effective = eff;
     out.fault = pS.fault;
     out.silenced = silenced;
     out.heat = pS.heat;
-    out.sound = eff != Level::Normal && !silenced && !pIn.maintenance; // FAULT acts as Yellow or deeper
+    out.sound = (pS.level != Level::Normal || pS.fault) && !silenced && !pIn.maintenance;
     return out;
 }
 

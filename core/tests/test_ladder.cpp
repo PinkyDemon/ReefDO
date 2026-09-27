@@ -74,7 +74,6 @@ TEST_CASE("Normal: nothing on, silent; pulse devices are powered", "[ladder]")
     Bench b;
     const Output o = b.Hold(6.5f, 3600);
     REQUIRE(o.level == Level::Normal);
-    REQUIRE(o.effective == Level::Normal);
     REQUIRE_FALSE(o.sound);
     REQUIRE_FALSE(o.fault);
     REQUIRE(o.deviceOn == std::array<bool, reefdo::DEVICES>{false, false, false, false, true, false});
@@ -88,10 +87,9 @@ TEST_CASE("Blue enters below mgl - h only after dwell; devices and pulse follow"
     REQUIRE(o.level == Level::Normal);
     o = b.Tick(5.60f); // 120 s
     REQUIRE(o.level == Level::Blue);
-    REQUIRE(o.effective == Level::Blue);
     REQUIRE(o.sound); // may sound; the configured pattern decides
     REQUIRE(HasEvent(o, EventType::LevelChange));
-    REQUIRE(HasEvent(o, EventType::EffectiveChange));
+    REQUIRE_FALSE(HasEvent(o, EventType::EffectiveChange)); // retired: the level is all there is
     REQUIRE(HasEvent(o, EventType::Pulse));
     REQUIRE(o.deviceOn[0]);
     REQUIRE(o.deviceOn[1]);
@@ -200,8 +198,7 @@ TEST_CASE("FAULT after five failed polls: loud, acts as Yellow, clears on the ne
     o = b.Tick(std::nullopt);
     REQUIRE(o.fault);
     REQUIRE(HasEvent(o, EventType::FaultEnter));
-    REQUIRE(o.level == Level::Normal);
-    REQUIRE(o.effective == Level::Red); // fault_level defaults to Red
+    REQUIRE(o.level == Level::Normal); // the level stays what the readings said; FAULT shows as FAULT
     REQUIRE(o.sound);
     REQUIRE(o.deviceOn[0]);
     REQUIRE(o.deviceOn[2]);
@@ -216,8 +213,9 @@ TEST_CASE("FAULT after five failed polls: loud, acts as Yellow, clears on the ne
     o = b.Tick(6.5f);
     REQUIRE_FALSE(o.fault);
     REQUIRE(HasEvent(o, EventType::FaultClear));
-    REQUIRE(o.effective == Level::Normal);
+    REQUIRE(o.level == Level::Normal);
     REQUIRE_FALSE(o.sound);
+    REQUIRE_FALSE(o.deviceOn[2]); // fault_level's devices stop with the FAULT
 }
 
 TEST_CASE("Failures must be consecutive to count", "[ladder]")
@@ -238,20 +236,31 @@ TEST_CASE("FAULT freezes the level machine and never lowers an existing level", 
     const Output o = b.Hold(std::nullopt, 3600);
     REQUIRE(o.fault);
     REQUIRE(o.level == Level::Red);
-    REQUIRE(o.effective == Level::Red);
     REQUIRE(o.sound);
 }
 
-TEST_CASE("fault_level is clamped to at least Yellow; Red is honoured", "[ladder]")
+TEST_CASE("FAULT runs fault_level's devices (at least Yellow's), never fewer than the level's own", "[ladder]")
 {
     Bench b;
-    b.cfg.faultLevel = Level::Blue;
-    REQUIRE(b.Hold(std::nullopt, 50).effective == Level::Yellow);
+    b.cfg.faultLevel = Level::Blue; // clamped to Yellow
+    Output o = b.Hold(std::nullopt, 50);
+    REQUIRE(o.level == Level::Normal);
+    REQUIRE(o.deviceOn[2]); // a Yellow device
 
     Bench r;
     r.cfg.faultLevel = Level::Red;
-    const Output o = r.Hold(std::nullopt, 50);
-    REQUIRE(o.effective == Level::Red);
+    r.cfg.devices[5] = {Trigger::Red, Mode::On, false};
+    o = r.Hold(std::nullopt, 50);
+    REQUIRE(o.deviceOn[5]); // a Red device
+
+    Bench y; // already at Red when the probe fails: FAULT as Yellow keeps Red's devices
+    y.cfg.faultLevel = Level::Yellow;
+    y.cfg.devices[5] = {Trigger::Red, Mode::On, false};
+    y.Tick(4.0f);
+    o = y.Hold(std::nullopt, 50);
+    REQUIRE(o.fault);
+    REQUIRE(o.level == Level::Red);
+    REQUIRE(o.deviceOn[5]);
 }
 
 TEST_CASE("Ack silences buzzer and siren, not the pumps; expires; deeper re-arms", "[ladder]")
@@ -281,15 +290,14 @@ TEST_CASE("Ack silences buzzer and siren, not the pumps; expires; deeper re-arms
     REQUIRE(o.sound);
 }
 
-TEST_CASE("An effective deepening (escalation) re-arms an acknowledged alarm", "[ladder]")
+TEST_CASE("A FAULT re-arms an acknowledged alarm", "[ladder]")
 {
     Bench b;
     b.Hold(5.00f, 60);
     b.Tick(5.00f, [](Input& pIn) { pIn.ackPressed = true; });
     REQUIRE(b.st.ackUntilMs.has_value());
-    // device 3 (Yellow) reported dead by the test → Yellow acts as Red
-    const Output o = b.Tick(5.00f, [](Input& pIn) { pIn.deviceFailed[2] = true; });
-    REQUIRE(o.effective == Level::Red);
+    const Output o = b.Hold(std::nullopt, 50); // the probe stops answering
+    REQUIRE(o.fault);
     REQUIRE_FALSE(o.silenced);
     REQUIRE(o.sound);
 }
@@ -470,46 +478,6 @@ TEST_CASE("is_night handles a window that wraps midnight and one that does not",
     REQUIRE_FALSE(IsNight(uint16_t{6 * 60}, c));
 }
 
-TEST_CASE("A device that failed its test makes its level act one deeper", "[ladder]")
-{
-    Bench b;
-    const auto failedBubbler = [](Input& pIn) { pIn.deviceFailed[0] = true; };
-    Output o = b.Hold(5.60f, 120, failedBubbler);
-    REQUIRE(o.level == Level::Blue);
-    REQUIRE(o.effective == Level::Yellow);
-    REQUIRE(o.sound);
-    REQUIRE(o.deviceOn[2]);
-    REQUIRE(o.deviceOn[3]);
-
-    SECTION("a failed device at another level does not escalate")
-    {
-        Bench c;
-        o = c.Hold(5.60f, 120, [](Input& pIn) { pIn.deviceFailed[2] = true; });
-        REQUIRE(o.effective == Level::Blue);
-    }
-    SECTION("can be switched off")
-    {
-        Bench c;
-        c.cfg.escalateIfFailed = false;
-        o = c.Hold(5.60f, 120, failedBubbler);
-        REQUIRE(o.effective == Level::Blue);
-    }
-    SECTION("Red cannot go deeper")
-    {
-        Bench c;
-        c.cfg.devices[5] = {Trigger::Red, Mode::On, false};
-        o = c.Tick(4.0f, [](Input& pIn) { pIn.deviceFailed[5] = true; });
-        REQUIRE(o.level == Level::Red);
-        REQUIRE(o.effective == Level::Red);
-    }
-    SECTION("FAULT on top of an escalated Blue acts as fault_level")
-    {
-        o = b.Hold(std::nullopt, 60, failedBubbler);
-        REQUIRE(o.fault);
-        REQUIRE(o.effective == Level::Red);
-    }
-}
-
 TEST_CASE("Maintenance mutes buzzer and siren, and keeps level-driven devices on", "[ladder]")
 {
     Bench b;
@@ -545,24 +513,21 @@ TEST_CASE("Event sequence of a full night: Blue, Yellow, recovery", "[ladder]")
 {
     Bench b;
     Output o = b.Hold(5.60f, 120);
-    REQUIRE(o.events.size() == 3); // LevelChange, EffectiveChange, Pulse
+    REQUIRE(o.events.size() == 2); // LevelChange, Pulse
     REQUIRE(o.events[0].type == EventType::LevelChange);
     REQUIRE(o.events[0].from == Level::Normal);
     REQUIRE(o.events[0].to == Level::Blue);
-    REQUIRE(o.events[1].type == EventType::EffectiveChange);
-    REQUIRE(o.events[2].type == EventType::Pulse);
-    REQUIRE(o.events[2].device == 4);
+    REQUIRE(o.events[1].type == EventType::Pulse);
+    REQUIRE(o.events[1].device == 4);
 
     o = b.Hold(5.00f, 60);
-    REQUIRE(o.events.size() == 2);
+    REQUIRE(o.events.size() == 1);
     REQUIRE(o.events[0].to == Level::Yellow);
 
     o = b.Hold(7.0f, 600);
-    REQUIRE(o.events.size() == 2);
+    REQUIRE(o.events.size() == 1);
     REQUIRE(o.events[0].from == Level::Yellow);
     REQUIRE(o.events[0].to == Level::Blue);
-    REQUIRE(o.events[1].from == Level::Yellow);
-    REQUIRE(o.events[1].to == Level::Blue);
 }
 
 TEST_CASE("fault.alert off: failed polls are counted but FAULT never fires", "[ladder]")
@@ -572,7 +537,7 @@ TEST_CASE("fault.alert off: failed polls are counted but FAULT never fires", "[l
     Output o = b.Hold(6.5f, 60);
     o = b.Hold(std::nullopt, 600);
     REQUIRE_FALSE(o.fault);
-    REQUIRE(o.effective == Level::Normal);
+    REQUIRE(o.level == Level::Normal);
     REQUIRE_FALSE(o.sound);
     REQUIRE_FALSE(HasEvent(o, EventType::FaultEnter));
     o = b.Tick(6.5f);

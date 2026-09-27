@@ -68,7 +68,6 @@ TEST_CASE("night_crash: Blue at night corrects the sag with the Blue devices, th
     REQUIRE(s.app.GetStatus().level == Level::Normal);
     REQUIRE(s.RunUntilLevel(Level::Blue, 6 * 3600));
     REQUIRE(s.MinuteOfDay() > 21 * 60);
-    REQUIRE(s.app.GetStatus().effective == Level::Blue);
     REQUIRE(s.app.GetStatus().deviceOn[0]);
     REQUIRE(s.app.GetStatus().deviceOn[1]);
     REQUIRE_FALSE(s.app.GetStatus().deviceOn[2]);
@@ -128,7 +127,7 @@ TEST_CASE("probe_disconnect: FAULT, urgent notifications repeating, siren, ack, 
     s.probe.Model().dropout = true;
     s.RunS(60);
     REQUIRE(s.app.GetStatus().fault);
-    REQUIRE(s.app.GetStatus().effective == Level::Red);
+    REQUIRE(s.app.GetStatus().deviceOn[2]); // fault_level's (Red) devices run
     REQUIRE(s.app.GetStatus().level == Level::Normal);
     REQUIRE(s.app.GetStatus().deviceOn[0]);
     REQUIRE(s.app.GetStatus().deviceOn[2]);
@@ -155,7 +154,8 @@ TEST_CASE("probe_disconnect: FAULT, urgent notifications repeating, siren, ack, 
     s.RunS(30);
     REQUIRE_FALSE(s.app.GetStatus().fault);
     REQUIRE(s.NotesOf(NotifyKind::FaultCleared) == 1);
-    REQUIRE(s.app.GetStatus().effective == Level::Normal);
+    REQUIRE_FALSE(s.app.GetStatus().deviceOn[2]);
+    REQUIRE(s.LastNote(NotifyKind::Fault)->level == Level::Red); // the push says whose devices it ran
 }
 
 TEST_CASE("fast_crash_straight_to_red: Red is immediate, urgent, repeats every 2 min", "[app]")
@@ -178,7 +178,9 @@ TEST_CASE("fast_crash_straight_to_red: Red is immediate, urgent, repeats every 2
     REQUIRE(s.LastNote(NotifyKind::Level)->repeat);
 }
 
-TEST_CASE("test_run_daily and test_no_response: the check passes, then a dead bubbler fails and escalates", "[app]")
+TEST_CASE(
+    "test_run_daily and test_no_response: the check passes, then a dead bubbler fails, shown but escalating nothing",
+    "[app]")
 {
     reefdo::config::Config c = ExampleConfig();
     c.test.noFailAboveMgl = 0.0f; // this tank sits above saturation: judge every miss
@@ -202,12 +204,13 @@ TEST_CASE("test_run_daily and test_no_response: the check passes, then a dead bu
     REQUIRE(s.app.GetStatus().deviceFailed[0]);
     REQUIRE(s.NotesOf(NotifyKind::TestFail) == 1);
     REQUIRE(s.LastNote(NotifyKind::TestFail)->device == 0);
-    // That night a Blue acts as Yellow: audible.
+    // That night a Blue stays Blue: the verdict is shown and pushed, but runs and sounds nothing extra.
     s.tank.SetSat(80.0f); // 5.36 mg/L: below Blue's 5.65, above Yellow's 5.05
     s.RunS(300);
     REQUIRE(s.app.GetStatus().level == Level::Blue);
-    REQUIRE(s.app.GetStatus().effective == Level::Yellow);
-    REQUIRE(s.app.GetStatus().sound);
+    REQUIRE(s.app.GetStatus().deviceOn[0]);
+    REQUIRE_FALSE(s.app.GetStatus().deviceOn[2]); // no Yellow device because of the failed bubbler
+    REQUIRE(s.app.GetStatus().deviceFailed[0]);
 
     // Cleaned: run now, the bubbler works again, the flag clears.
     s.tank.SetSat(104.0f);
@@ -341,7 +344,7 @@ TEST_CASE("Stuck probe readings are flagged in the log and count towards FAULT",
     REQUIRE_FALSE(s.app.GetStatus().fault); // not yet: five frozen polls
     s.RunS(30);
     REQUIRE(s.app.GetStatus().fault); // a frozen probe is a broken probe
-    REQUIRE(s.app.GetStatus().effective == Level::Red);
+    REQUIRE(s.app.GetStatus().deviceOn[2]);
     s.probe.Model().stuck = false;
     s.RunS(30);
     REQUIRE_FALSE(s.app.GetStatus().fault);
@@ -670,9 +673,9 @@ TEST_CASE("A device switched off by hand during an alert comes back when the lev
     s.app.SetMaintenance(false, s.clock);
     REQUIRE_FALSE(st.deviceOn[0]); // ReefDO maintenance does not end it
     s.tank.SetSat(60.0f);
-    for(uint32_t t = 0; t < 900 && st.effective == Level::Blue; t += TICK_S)
+    for(uint32_t t = 0; t < 900 && st.level == Level::Blue; t += TICK_S)
         s.Tick();
-    REQUIRE(st.effective > Level::Blue); // escalated: the ladder's devices are its own again
+    REQUIRE(st.level > Level::Blue); // deeper: the ladder's devices are its own again
     REQUIRE_FALSE(st.manual[0].has_value());
     REQUIRE(st.deviceOn[0]);
 }
@@ -894,4 +897,30 @@ TEST_CASE("Maintenance mode ends by itself after 30 min, logged as such; enterin
     s.app.SetMaintenance(true, s.clock);
     s.app.SetMaintenance(false, s.clock);
     REQUIRE_THAT(Commands(s).back().f1, WithinAbs(0.0, 1e-6)); // by command
+}
+
+TEST_CASE("A failed test verdict can be cleared by hand, logged; it never changed what runs", "[app][selftest]")
+{
+    Scenario s;
+    s.Start();
+    reefdo::selftest::Persistent p;
+    p.failActive[2] = true; // the strong air pump failed some evening
+    s.app.RestoreTest(p);
+    s.Tick();
+    REQUIRE(s.app.TestPersistentChanged()); // the restored history, saved once (as the firmware does)
+    const reefdo::app::Status& st = s.app.GetStatus();
+    REQUIRE(st.deviceFailed[2]);
+    REQUIRE_FALSE(st.deviceOn[2]); // Normal: a failed Yellow device stays off
+    REQUIRE_FALSE(s.app.ClearFailure(reefdo::DEVICES, s.clock));
+    REQUIRE(s.app.ClearFailure(0, s.clock)); // nothing to clear: accepted, not logged
+    REQUIRE(Commands(s).empty());
+    REQUIRE(s.app.ClearFailure(2, s.clock));
+    REQUIRE_FALSE(st.deviceFailed[2]);
+    REQUIRE_FALSE(s.app.TestPersistent().failActive[2]);
+    REQUIRE(s.app.TestPersistentChanged()); // the firmware saves it
+    const std::vector<CommandRec> cmds = Commands(s);
+    REQUIRE(cmds.size() == 1);
+    REQUIRE(cmds[0].aux == (11u | 2u << 8));
+    s.Tick();
+    REQUIRE_FALSE(st.deviceFailed[2]); // and it stays cleared
 }

@@ -60,7 +60,7 @@ struct Config
     uint32_t ackSilenceS = 1800;
     uint32_t faultConsecutiveFailures = 5;
     bool faultAlert = true;        // off: probe failures are logged and counted, but never raise FAULT
-    Level faultLevel = Level::Red; // FAULT acts as this level; never shallower than Yellow (FAULT is loud)
+    Level faultLevel = Level::Red; // FAULT runs this level's devices; never shallower than Yellow (FAULT is loud)
     uint32_t pulseS = 10;
     uint32_t pulseMinIntervalS = 1800;
     float heatOnC = 28.0f;
@@ -69,7 +69,6 @@ struct Config
     uint16_t nightStartMin = 21 * 60; // minutes after local midnight
     uint16_t nightEndMin = 8 * 60;
     bool unknownTimeIsNight = true;
-    bool escalateIfFailed = true; // a device that failed its test makes its level act one deeper
     std::array<DeviceConfig, DEVICES> devices{};
 
     const LevelConfig& GetLevel(Level pL) const; // Blue, Yellow or Red only
@@ -85,13 +84,12 @@ struct Input
     std::optional<uint16_t> minuteOfDay; // local time; nullopt until the clock is known
     bool ackPressed = false;
     bool maintenance = false;
-    std::array<bool, DEVICES> deviceFailed{}; // last test of that device was `fail`
 };
 
 enum class EventType : uint8_t
 {
-    LevelChange,     // from → to (the state machine's own level)
-    EffectiveChange, // what the outputs act as (level + escalation + fault); notifications follow this one
+    LevelChange,     // from → to: the level the readings support
+    EffectiveChange, // up to 1.0 only (an escalated level); kept so the logged codes keep their meaning
     FaultEnter,
     FaultClear,
     Ack,
@@ -110,10 +108,9 @@ struct Event
 
 struct Output
 {
-    Level level = Level::Normal;     // state-machine level
-    Level effective = Level::Normal; // level the outputs act as
-    bool fault = false;
-    bool silenced = false; // Ack in effect
+    Level level = Level::Normal; // what the readings support; frozen while the probe fails
+    bool fault = false;          // the probe failed: fault.level's devices run (if deeper), fault signal
+    bool silenced = false;       // Ack in effect
     bool heat = false;
     std::array<bool, DEVICES> deviceOn{};   // semantic "powered"; NO/NC polarity is applied by the caller
     bool sound = false;                     // the alarm may sound: an alert or FAULT, not silenced, not in maintenance
@@ -131,7 +128,6 @@ struct PulseState
 struct State
 {
     Level level = Level::Normal;
-    Level effective = Level::Normal;
     bool fault = false;
     uint32_t consecutiveFailures = 0;
     std::array<std::optional<uint64_t>, 3> belowSinceMs{}; // [Blue-1, Yellow-1, Red-1]

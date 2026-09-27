@@ -104,9 +104,8 @@ int CmdStatus(int pArgc, char** pArgv)
         std::printf("DO --  probe status %d, %lu consecutive failures\n", static_cast<int>(s.probe),
                     static_cast<unsigned long>(s.consecutiveFailures));
     }
-    std::printf("level %s (effective %s)%s%s%s%s\n", LEVEL[static_cast<int>(s.level)],
-                LEVEL[static_cast<int>(s.effective)], s.fault ? "  FAULT" : "", s.silenced ? "  silenced" : "",
-                s.heat ? "  heat" : "", s.maintenance ? "  MAINTENANCE" : "");
+    std::printf("level %s%s%s%s%s\n", LEVEL[static_cast<int>(s.level)], s.fault ? "  FAULT" : "",
+                s.silenced ? "  silenced" : "", s.heat ? "  heat" : "", s.maintenance ? "  MAINTENANCE" : "");
     if(s.maintenance)
         std::printf("maintenance ends by itself in %lu min\n",
                     static_cast<unsigned long>((s.maintenanceLeftS + 59) / 60));
@@ -175,6 +174,18 @@ int CmdTest(int pArgc, char** pArgv)
     {
         const std::size_t n = reefdo::api::TestJson(sampler::App(), sBuf);
         std::printf("%.*s\n", static_cast<int>(n), sBuf);
+        return 0;
+    }
+    if(pArgc == 3 && Is(pArgv[1], "clear"))
+    {
+        const int n = std::atoi(pArgv[2]);
+        if(n < 1 || n > DEVICE_COUNT ||
+           !sampler::App().ClearFailure(static_cast<std::size_t>(n - 1), sampler::ClockNow()))
+        {
+            std::printf("device must be 1..%d\n", DEVICE_COUNT);
+            return 1;
+        }
+        std::printf("device %d: test failure cleared\n", n);
         return 0;
     }
     const reefdo::selftest::Persistent& p = sampler::App().TestPersistent();
@@ -613,7 +624,7 @@ void Start()
     Add("status", "status [json]", CmdStatus);
     Add("ack", "silence the alarm for ack_silence_s", CmdAck);
     Add("maint", "maint on|off", CmdMaint);
-    Add("test", "test [run|json]  (the devices' self test)", CmdTest);
+    Add("test", "test [run|json|clear <device>]  (the devices' self test; clear a failed verdict)", CmdTest);
     Add("cal", "cal air", CmdCal);
     Add("suspend", "suspend <device> <minutes>|off  (device maintenance: off, alerts included)", CmdSuspend);
     Add("manual", "manual <device> on|off|auto  (until the next scheduled or triggered change)", CmdManual);

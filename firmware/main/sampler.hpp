@@ -25,7 +25,7 @@ enum class ProbeSource : uint8_t
 // Snapshot for the indicator task.
 struct Indication
 {
-    reefdo::ladder::Level effective = reefdo::ladder::Level::Normal;
+    reefdo::ladder::Level level = reefdo::ladder::Level::Normal;
     bool sound = false; // the ladder lets the alarm sound
     bool fault = false;
     bool maintenance = false;

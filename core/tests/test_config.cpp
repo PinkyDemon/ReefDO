@@ -47,7 +47,7 @@ const char* sExample = R"({
     "6": { "name": "unused",          "slot": { "type": "relay", "channel": 6, "wiring": "NO" }, "trigger": "none" }
   },
   "test": { "window": ["19:30", "21:00"], "settle_s": 120, "tail_s": 60, "min_headroom_pct": 3.0,
-               "inconclusive_days": 5, "escalate_if_failed": true, "chirp": true,
+               "inconclusive_days": 5, "chirp": true,
                "induce_deficit_s": 0, "induce_deficit_device": 5 },
   "boost": { "enabled": true, "window": ["19:30", "20:00"], "target_mgl": 6.5 },
   "correction": { "scale": 1.0, "offset": 0.0 },
@@ -183,7 +183,6 @@ TEST_CASE("The example document loads into the expected fields", "[config]")
     REQUIRE(c.boost.windowEndMin == 20 * 60);
     REQUIRE(c.boost.devices[0]);
     REQUIRE_FALSE(c.boost.devices[1]);
-    REQUIRE(c.ladder.escalateIfFailed);
     REQUIRE(c.correction.IsFactory());
     REQUIRE(c.ntfy.minLevel == Level::Blue);
     REQUIRE_FALSE(c.ntfy.enabled);

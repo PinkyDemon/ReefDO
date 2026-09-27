@@ -38,13 +38,16 @@ Facts an agent needs to work in this repository. The README covers usage; this c
   config decides the buzzer patterns; the LED codes are fixed in the firmware (`indicator.cpp`).
 - The self test's settings live in `config.test` (`selftest::Config`, with `test.devices[i]`), like the ladder's
   (`config.ladder`) and the boost's (`config.boost`); the App steps them straight from `mCfg`.
-- Blue is silent unless configured; Normal is always silent; FAULT acts as `fault.level` (Red by default).
+- Blue is silent unless configured; Normal is always silent. The level is only what the readings support — no
+  hidden escalation: a failed test verdict is shown and pushed but changes nothing that runs or sounds
+  (`App::ClearFailure` clears it by hand). FAULT shows as FAULT and runs `fault.level`'s devices (Red by default);
+  the level stays frozen at what the last readings said.
 - Device demand is the OR of the ladder, the self test (`selftest.cpp`, called "service" up to 1.0), the
   boost (`boost.cpp`), the always-on windows and the manual switch (`app::Demand`, reported as
   `Status::deviceWhy`); the boost yields to a test run and maintenance and runs at most once per local day; an
   exclusive test (`test.exclusive`) holds the windows off and ends manual switches, and only an exclusive run
   measures or judges. A manual on/off (`App::SetManual`) overrides the demands until the device's demands or
-  the effective level change, or an exclusive test starts; then it is automatic again.
+  the level or FAULT change, or an exclusive test starts; then it is automatic again.
 - ReefDO maintenance (maintenance mode: controller work, hushes the buzzer, ends by itself after
   `app::MAINTENANCE_S` = 30 min) and device maintenance (a device out of order, RAM only) are independent. An
   out-of-order device is off regardless of every demand, alerts included; a test that would exercise it skips or

@@ -97,7 +97,8 @@ TEST_CASE("status_json describes the device, the ladder thresholds, and every de
     REQUIRE(f["probe"]["do"].isNull());
     REQUIRE(f["probe"]["status"] == "timeout");
     REQUIRE(f["ladder"]["fault"] == true);
-    REQUIRE(f["ladder"]["effective"] == "red");
+    REQUIRE(f["ladder"]["level"] == "normal"); // FAULT shows as FAULT; the level stays the readings'
+    REQUIRE(f["ladder"]["effective"].isNull());
     REQUIRE(f["ladder"]["buzzer"] == "triple"); // what plays: the configured FAULT pattern
 
     Scenario nc; // clock unknown: no "unix" key
@@ -389,6 +390,8 @@ TEST_CASE("apply_command: suspend and manual, and their refusals", "[api][device
     REQUIRE(std::string(c.message) == "device resumed");
     REQUIRE(s.app.GetStatus().deviceOn[4]);
 
+    REQUIRE(std::string(ApplyCommand(s.app, R"({"clear":{"device":3}})", s.clock).message) == "test failure cleared");
+    REQUIRE(std::string(ApplyCommand(s.app, R"({"clear":{"device":0}})", s.clock).message) == "no such device number");
     REQUIRE(std::string(ApplyCommand(s.app, R"({"manual":{"device":0,"on":true}})", s.clock).message) ==
             "no such device number");
     REQUIRE(std::string(ApplyCommand(s.app, R"({"manual":{"device":"two","on":true}})", s.clock).message) ==

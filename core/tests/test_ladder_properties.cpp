@@ -26,7 +26,6 @@ Config RandomConfig(proptest::Rng& pRng)
     c.red.dwellS = pRng.Below(2) * 10;
     c.recoverSustainS = 60 + pRng.Below(6) * 60;
     c.nightLock = pRng.Coin();
-    c.escalateIfFailed = pRng.Coin(0.7);
     c.blueSlopeMglPer10min = pRng.Coin(0.3) ? 0.5f : 0.0f;
     c.pulseS = 10 + pRng.Below(3) * 10;
     c.pulseMinIntervalS = pRng.Below(3) * 300;
@@ -77,8 +76,6 @@ TEST_CASE("Ladder invariants hold on random histories", "[ladder][property]")
                     pRng.Coin(0.1) ? std::nullopt : std::optional<uint16_t>(static_cast<uint16_t>(pRng.Below(1440)));
                 in.ackPressed = pRng.Coin(0.05);
                 in.maintenance = pRng.Coin(0.05);
-                for(auto& f : in.deviceFailed)
-                    f = pRng.Coin(0.1);
 
                 // Invariant 6 (ack never changes the level): the same tick without the press lands on the
                 // same level.
@@ -91,7 +88,9 @@ TEST_CASE("Ladder invariants hold on random histories", "[ladder][property]")
                 now += 10'000;
 
                 REQUIRE(o.level == quietOut.level);
-                REQUIRE(o.effective >= o.level);
+                // The level whose devices run: the readings' own, or fault_level (at least Yellow) in a FAULT.
+                const Level faultAt = cfg.faultLevel < Level::Yellow ? Level::Yellow : cfg.faultLevel;
+                const Level at = o.fault && faultAt > o.level ? faultAt : o.level;
 
                 // Invariant 3: deeper is immediate, shallower is exactly one step, and only with a
                 // reading.
@@ -116,21 +115,20 @@ TEST_CASE("Ladder invariants hold on random histories", "[ladder][property]")
                     }
                     else if(tl.has_value())
                     {
-                        expect = *tl <= o.effective;
+                        expect = *tl <= at; // no hidden escalation: nothing but the level (or FAULT) decides
                     }
-                    if(dc.ackSilences)
-                        expect = expect && o.effective >= Level::Yellow && !o.silenced && !in.maintenance;
+                    if(dc.ackSilences) expect = expect && at >= Level::Yellow && !o.silenced && !in.maintenance;
                     REQUIRE(o.deviceOn[i] == expect);
                 }
 
                 // Invariant 4: the alarm may sound exactly when an alert or FAULT shows, unsilenced, not in
                 // maintenance.
-                REQUIRE(o.sound == (o.effective != Level::Normal && !o.silenced && !in.maintenance));
+                REQUIRE(o.sound == ((o.level != Level::Normal || o.fault) && !o.silenced && !in.maintenance));
 
                 // Invariant 5: FAULT is loud and acts as at least Yellow.
                 if(o.fault)
                 {
-                    REQUIRE(o.effective >= Level::Yellow);
+                    REQUIRE(at >= Level::Yellow);
                     if(!prevFault) REQUIRE_FALSE(in.doMgl.has_value());
                 }
                 if(!o.fault && prevFault) REQUIRE(in.doMgl.has_value());

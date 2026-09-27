@@ -463,12 +463,12 @@ const char* Name(BuzzerPattern pP)
     return BUZZER_NAMES[static_cast<uint8_t>(pP)];
 }
 
-const Signal& SignalsConfig::of(ladder::Level pEffective, bool pIsFault) const
+const Signal& SignalsConfig::of(ladder::Level pLevel, bool pIsFault) const
 {
     if(pIsFault) return fault;
-    if(pEffective == ladder::Level::Blue) return blue;
-    if(pEffective == ladder::Level::Yellow) return yellow;
-    if(pEffective == ladder::Level::Red) return red;
+    if(pLevel == ladder::Level::Blue) return blue;
+    if(pLevel == ladder::Level::Yellow) return yellow;
+    if(pLevel == ladder::Level::Red) return red;
     return normal;
 }
 
@@ -538,7 +538,6 @@ LoadResult Load(std::string_view pJson, Config& pOut, const Config& pBase)
     r.Number(root, "ack_silence_s", "ack_silence_s", cfg.ladder.ackSilenceS);
     r.Number(root, "salinity_psu", "salinity_psu", cfg.salinityPsu);
     r.Flag(root, "allow_zero_cal", "allow_zero_cal", cfg.allowZeroCal);
-    r.Flag(root, "escalate_if_failed", "escalate_if_failed", cfg.ladder.escalateIfFailed);
 
     const JsonObjectConst levels = r.Object(root, "levels", "levels");
     const JsonObjectConst blue = r.Object(levels, "blue", "levels.blue");
@@ -822,7 +821,6 @@ std::size_t Write(const Config& pCfg, std::span<char> pOut, bool pRedact)
     fault["alert"] = l.faultAlert;
 
     doc["ack_silence_s"] = l.ackSilenceS;
-    doc["escalate_if_failed"] = l.escalateIfFailed;
 
     JsonObject devices = doc["devices"].to<JsonObject>();
     for(std::size_t i = 0; i < DEVICES; ++i)

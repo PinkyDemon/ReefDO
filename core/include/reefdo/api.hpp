@@ -32,7 +32,8 @@ config::LoadResult ApplyConfig(app::App& pApp, std::string_view pJson, const app
 std::size_t ResultJson(const config::LoadResult& pR, std::span<char> pOut);
 
 // POST /api/cmd, one command per document: {"ack":true} · {"maintenance":b} · {"test":"run"} · {"cal":"air"}
-// · {"suspend":{"device":n,"s":n}} · {"manual":{"device":n,"on":b|null}} (n = the device number, 1..DEVICES)
+// · {"suspend":{"device":n,"s":n}} · {"manual":{"device":n,"on":b|null}} · {"clear":{"device":n}} (a failed test
+// verdict; n = the device number, 1..DEVICES)
 // · {"time":{"unix":s,"tz":s}}
 struct Command
 {

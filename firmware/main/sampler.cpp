@@ -233,7 +233,7 @@ void TickLocked()
     const reefdo::app::Status& s = sHost.app->GetStatus();
     ApplyRelaysLocked();
 
-    sHost.ind.effective = s.effective;
+    sHost.ind.level = s.level;
     sHost.ind.sound = s.sound;
     sHost.ind.fault = s.fault;
     sHost.ind.maintenance = s.maintenance;

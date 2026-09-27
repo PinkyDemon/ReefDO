@@ -78,8 +78,8 @@ struct SignalsConfig
     Signal fault{BuzzerPattern::Triple, 2};
     bool operator==(const SignalsConfig&) const = default;
 
-    // The signal for what the ladder is showing: fault wins, then the effective level.
-    const Signal& of(ladder::Level pEffective, bool pFault) const;
+    // The signal for what the ladder is showing: FAULT wins, then the level.
+    const Signal& of(ladder::Level pLevel, bool pFault) const;
 };
 
 struct Config

@@ -93,7 +93,7 @@ void App::LogSimple(const Clock& pClock, log::Type pType, uint32_t pAux, float p
     r.ts = pClock.unixS.value_or(0);
     r.uptimeS = UptimeS(pClock);
     r.type = pType;
-    r.level = static_cast<uint8_t>(mStatus.effective);
+    r.level = static_cast<uint8_t>(mStatus.level);
     r.aux = pAux;
     r.f0 = pF0;
     r.f1 = pF1;
@@ -157,7 +157,7 @@ void App::LogLadderEvents(const Clock& pClock, const ladder::Output& pOut, float
         r.ts = pClock.unixS.value_or(0);
         r.uptimeS = UptimeS(pClock);
         r.type = log::Type::Event;
-        r.level = static_cast<uint8_t>(pOut.effective);
+        r.level = static_cast<uint8_t>(pOut.level);
         r.flags = static_cast<uint16_t>(static_cast<uint8_t>(e.from) | (static_cast<uint8_t>(e.to) << 8));
         r.aux = static_cast<uint32_t>(e.type) | (static_cast<uint32_t>(e.device) << 8);
         r.f0 = pDoNow;
@@ -167,7 +167,7 @@ void App::LogLadderEvents(const Clock& pClock, const ladder::Output& pOut, float
         Notification n{NotifyKind::Level};
         switch(e.type)
         {
-            case ladder::EventType::EffectiveChange:
+            case ladder::EventType::LevelChange:
                 if(e.to == Level::Normal)
                 {
                     n.kind = NotifyKind::Recovered;
@@ -177,7 +177,6 @@ void App::LogLadderEvents(const Clock& pClock, const ladder::Output& pOut, float
                     n.level = e.to;
                     n.urgent = e.to >= Level::Yellow;
                     mLastAlertNotifyMs = pClock.nowMs;
-                    mLastNotifiedLevel = e.to;
                 }
                 else
                 {
@@ -187,7 +186,9 @@ void App::LogLadderEvents(const Clock& pClock, const ladder::Output& pOut, float
                 break;
             case ladder::EventType::FaultEnter:
                 n.kind = NotifyKind::Fault;
+                n.level = mCfg.ladder.faultLevel; // whose devices it runs
                 n.urgent = true;
+                mLastAlertNotifyMs = pClock.nowMs;
                 Notify(n);
                 break;
             case ladder::EventType::FaultClear:
@@ -207,7 +208,7 @@ void App::LogBoostEvents(const Clock& pClock, const boost::Output& pOut)
         r.ts = pClock.unixS.value_or(0);
         r.uptimeS = UptimeS(pClock);
         r.type = log::Type::Boost;
-        r.level = static_cast<uint8_t>(mStatus.effective);
+        r.level = static_cast<uint8_t>(mStatus.level);
         r.aux = static_cast<uint32_t>(e.type);
         r.f0 = e.doMgl;
         r.f1 = mCfg.boost.targetMgl;
@@ -224,7 +225,7 @@ void App::LogTestEvents(const Clock& pClock, const selftest::Output& pOut)
         r.ts = pClock.unixS.value_or(0);
         r.uptimeS = UptimeS(pClock);
         r.type = log::Type::Test;
-        r.level = static_cast<uint8_t>(mStatus.effective);
+        r.level = static_cast<uint8_t>(mStatus.level);
         r.flags = static_cast<uint16_t>((e.judged ? 1 : 0) | (e.clockUnknown ? 2 : 0) | (e.aborted ? 4 : 0) |
                                         (e.highDo ? 8 : 0));
         r.aux = static_cast<uint32_t>(e.type) | (static_cast<uint32_t>(e.device) << 8) |
@@ -250,12 +251,13 @@ void App::LogTestEvents(const Clock& pClock, const selftest::Output& pOut)
 
 void App::AlertRepeat(const Clock& pClock)
 {
-    if(mStatus.effective < Level::Yellow || mStatus.silenced || mStatus.maintenance) return;
-    const uint32_t interval = mStatus.effective == Level::Red ? RED_REPEAT_MS : YELLOW_REPEAT_MS;
-    if(pClock.nowMs - mLastAlertNotifyMs < interval) return;
+    const bool alarm = mStatus.fault || mStatus.level >= Level::Yellow;
+    if(!alarm || mStatus.silenced || mStatus.maintenance) return;
+    const bool loud = mStatus.fault || mStatus.level == Level::Red; // FAULT repeats like Red
+    if(pClock.nowMs - mLastAlertNotifyMs < (loud ? RED_REPEAT_MS : YELLOW_REPEAT_MS)) return;
     mLastAlertNotifyMs = pClock.nowMs;
     Notification n{mStatus.fault ? NotifyKind::Fault : NotifyKind::Level};
-    n.level = mStatus.effective;
+    n.level = mStatus.fault ? mCfg.ladder.faultLevel : mStatus.level;
     n.urgent = true;
     n.repeat = true;
     Notify(n);
@@ -333,7 +335,8 @@ void App::Tick(const Clock& pClock)
     mStatus.slopeMglPer10min = mSlopeDo.SlopePer10min();
 
     // 2. Ladder
-    const Level wasEffective = mStatus.effective;
+    const Level wasLevel = mStatus.level;
+    const bool wasFault = mStatus.fault;
     ladder::Input li;
     li.doMgl = pr.status == probe::Status::Stuck ? std::nullopt : doMed; // a frozen value is not a reading
     li.slopeMglPer10min = mStatus.slopeMglPer10min;
@@ -342,11 +345,9 @@ void App::Tick(const Clock& pClock)
     if(lt.has_value()) li.minuteOfDay = lt->minuteOfDay;
     li.ackPressed = mAckPending;
     li.maintenance = mStatus.maintenance;
-    li.deviceFailed = mTest.p.failActive;
     mAckPending = false;
     const ladder::Output lo = ladder::Step(mLadder, li, mCfg.ladder);
     mStatus.level = lo.level;
-    mStatus.effective = lo.effective;
     mStatus.fault = lo.fault;
     mStatus.silenced = lo.silenced;
     mStatus.heat = lo.heat;
@@ -387,7 +388,7 @@ void App::Tick(const Clock& pClock)
     // A manual switch lasts until the next scheduled or triggered change, and an exclusive test starts clean.
     const bool holdOff = mCfg.test.exclusive && so.running;
     const bool testStarts = holdOff && !wasTesting;
-    const bool levelChanged = lo.effective != wasEffective;
+    const bool levelChanged = lo.level != wasLevel || lo.fault != wasFault; // what runs because of the ladder
     for(std::size_t i = 0; i < DEVICES; ++i)
     {
         const bool window = !holdOff && lt.has_value() && InWindows(mCfg.devices[i].windows, lt->minuteOfDay);
@@ -408,7 +409,7 @@ void App::Tick(const Clock& pClock)
         r.ts = pClock.unixS.value_or(0);
         r.uptimeS = mStatus.uptimeS;
         r.type = log::Type::Measurement;
-        r.level = static_cast<uint8_t>(lo.effective);
+        r.level = static_cast<uint8_t>(lo.level);
         r.flags = static_cast<uint16_t>(
             (pr.status == probe::Status::Stuck ? FLAG_STUCK : 0) | (mStatus.maintenance ? FLAG_MAINTENANCE : 0) |
             (lo.silenced ? FLAG_SILENCED : 0) | (so.running ? FLAG_TEST_RUNNING : 0) | (lo.heat ? FLAG_HEAT : 0) |
@@ -419,7 +420,7 @@ void App::Tick(const Clock& pClock)
         r.f3 = mStatus.slopeMglPer10min;
         r.aux = static_cast<uint32_t>(pr.reading->doMgl * 1000.0f); // the probe's own number, for the record
         Write(r, false);
-        Aggregate(pClock, *pr.reading, *doMed, lo.effective);
+        Aggregate(pClock, *pr.reading, *doMed, lo.level);
         // Daily accumulation
         if(mDaily.samples == 0 || *doMed < mDaily.doMin)
         {
@@ -429,7 +430,7 @@ void App::Tick(const Clock& pClock)
         if(mDaily.samples == 0 || *doMed > mDaily.doMax) mDaily.doMax = *doMed;
         mDaily.doSum += *doMed;
         mDaily.tempSum += pr.reading->tempC;
-        if(static_cast<uint8_t>(lo.effective) > mDaily.levelMax) mDaily.levelMax = static_cast<uint8_t>(lo.effective);
+        if(static_cast<uint8_t>(lo.level) > mDaily.levelMax) mDaily.levelMax = static_cast<uint8_t>(lo.level);
         ++mDaily.samples;
     }
     LogLadderEvents(pClock, lo, doNow);
@@ -615,6 +616,18 @@ probe::CalResult App::AirCalibrate(const Clock& pClock)
     const probe::CalResult r = mProbe.AirCalibrate();
     LogSimple(pClock, log::Type::Command, 3, static_cast<float>(r), 0.0f);
     return r;
+}
+
+bool App::ClearFailure(std::size_t pDevice, const Clock& pClock)
+{
+    if(pDevice >= DEVICES) return false;
+    if(mTest.p.failActive[pDevice])
+    {
+        mTest.p.failActive[pDevice] = false;
+        mStatus.deviceFailed[pDevice] = false;
+        LogSimple(pClock, log::Type::Command, 11u | static_cast<uint32_t>(pDevice) << 8, 0.0f, 0.0f);
+    }
+    return true;
 }
 
 bool App::TestPersistentChanged()

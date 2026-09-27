@@ -69,7 +69,7 @@ Rgb LedFrame(const sampler::Indication& pIn, uint32_t pTMs, bool pPressed, bool 
     if(pIn.testRunning) return Scale({255, 255, 255}, bright * (0.2f + 0.8f * Breathe(pTMs, 1500)));
     if(pIn.maintenance) return Scale({0, 180, 180}, bright);
     if(pIn.fault) return Blink(pTMs, 250) ? Scale({0, 0, 255}, bright) : Scale({255, 0, 0}, bright); // police
-    switch(pIn.effective)
+    switch(pIn.level)
     {
         case reefdo::ladder::Level::Blue: return Blink(pTMs, 1000) ? Scale({0, 0, 255}, bright) : Rgb{0, 0, 0};
         case reefdo::ladder::Level::Yellow: return Blink(pTMs, 500) ? Scale({255, 170, 0}, bright) : Rgb{0, 0, 0};
@@ -144,7 +144,7 @@ void Task(void*)
         board::LedRgb(c.r, c.g, c.b);
 
         // The ladder gates the buzzer (not at Normal, not silenced, not in maintenance); config shapes it.
-        const Signal& s = in.signals.of(in.effective, in.fault);
+        const Signal& s = in.signals.of(in.level, in.fault);
         bool on = in.sound && BuzzerOn(s.buzzer, tMs);
         uint32_t hz = in.signals.buzzerHz;
         uint32_t volume = s.volume;
