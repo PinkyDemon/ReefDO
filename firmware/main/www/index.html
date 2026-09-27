@@ -68,6 +68,13 @@ section.on{display:block}
 .dev .n{font-weight:600;display:flex;justify-content:space-between;align-items:center;gap:6px}
 .dev .st{font-family:var(--mono);font-size:12px;margin-top:6px;display:flex;justify-content:space-between;color:var(--muted)}
 .dev.on{border-color:var(--green);box-shadow:inset 0 0 0 1px var(--green)}
+.dev.out{border-color:var(--red);box-shadow:inset 0 0 0 1px var(--red)}
+.btn.sm{padding:2px 8px;font-size:12px;border-radius:6px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.seg button{border:0;background:var(--card);padding:2px 8px;font-size:12px;cursor:pointer;color:var(--muted)}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button.on{background:var(--text);color:var(--bg)}
+.seg button[disabled]{opacity:.45;cursor:not-allowed}
 .tag{font-size:11px;padding:1px 7px;border-radius:999px;font-weight:600;text-transform:uppercase;letter-spacing:.05em}
 .tag.blue{background:var(--blue-bg);color:var(--blue)} .tag.yellow{background:var(--yellow-bg);color:var(--yellow)}
 .tag.red{background:var(--red-bg);color:var(--red)} .tag.heat{background:var(--purple-bg);color:var(--purple)} .tag.none{background:var(--line);color:var(--muted)}
@@ -88,6 +95,8 @@ canvas{display:block;width:100%;border-radius:8px}
 label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted)}
 label.f input,label.f select{padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:var(--soft);font-size:14px;color:var(--text)}
 label.c{display:flex;align-items:center;gap:8px;font-size:14px}
+.sf{display:inline-flex;gap:4px;align-items:center;margin:0 8px 3px 0;font-size:12px;color:var(--muted);white-space:nowrap}
+.slotcell select[data-slottype]{margin:0 8px 3px 0}
 td input:not([type=checkbox]),td select{padding:5px 7px;border:1px solid var(--line);border-radius:6px;background:var(--soft);color:var(--text);font-size:13px}
 .note{font-size:13px;color:var(--muted);margin-top:6px}
 .warn{border-left:3px solid var(--yellow);padding:8px 12px;background:var(--yellow-bg);color:var(--text);border-radius:6px;font-size:14px}
@@ -118,7 +127,7 @@ h2{font-size:16px;margin:18px 0 10px}
   </div>
   <nav id="nav">
     <a href="#status" class="on">Status</a><a href="#chart">Chart</a><a href="#events">Events</a>
-    <a href="#service">Service</a><a href="#config">Config</a><a href="#maint">Maintenance</a>
+    <a href="#test">Test</a><a href="#config">Config</a><a href="#maint">Maintenance</a>
     <a href="#export">Export</a><a href="#setup">Setup</a>
   </nav>
 </header>
@@ -163,8 +172,8 @@ h2{font-size:16px;margin:18px 0 10px}
     <div class="card">
       <h3>Tonight</h3>
       <div class="kv">
-        <b>service window</b><span id="svc-window">—</span>
-        <b>service</b><span id="svc-state">—</span>
+        <b>test window</b><span id="svc-window">—</span>
+        <b>test</b><span id="svc-state">—</span>
         <b>last check</b><span id="svc-last">—</span>
         <b>boost</b><span id="boost-state">—</span>
       </div>
@@ -210,13 +219,13 @@ h2{font-size:16px;margin:18px 0 10px}
   </div>
 </section>
 
-<section id="service">
+<section id="test">
   <div class="grid">
     <div class="card">
       <h3>Window</h3>
       <div class="big" style="font-size:28px" id="svc-win2">—</div>
       <div class="note" id="svc-note"></div>
-      <div class="row" style="margin-top:10px"><button class="btn primary" onclick="cmd({service:'run'},'Service run requested')">Run now</button><span class="muted" style="font-size:13px" id="svc-dur"></span></div>
+      <div class="row" style="margin-top:10px"><button class="btn primary" onclick="cmd({test:'run'},'Test run requested')">Run now</button><span class="muted" style="font-size:13px" id="svc-dur"></span></div>
     </div>
     <div class="card">
       <h3>Last outcome per device</h3>
@@ -243,27 +252,30 @@ h2{font-size:16px;margin:18px 0 10px}
   <div class="card">
     <h3>Devices</h3>
     <div style="overflow-x:auto"><table>
-      <thead><tr><th>#</th><th data-tip="devices.*.name">name</th><th data-tip="devices.*.wired">wired</th><th data-tip="devices.*.trigger">trigger</th><th data-tip="devices.*.mode">mode</th><th data-tip="devices.*.ack_silences">ack silences</th><th data-tip="devices.*.service_s">service (s)</th><th data-tip="devices.*.min_response_pct">min response (%)</th><th data-tip="devices.*.boost">boost</th></tr></thead>
+      <thead><tr><th>#</th><th data-tip="devices.*.name">name</th><th data-tip="devices.*.slot">output</th><th data-tip="devices.*.trigger">trigger</th><th data-tip="devices.*.mode">mode</th><th data-tip="devices.*.ack_silences">ack silences</th><th data-tip="devices.*.test_s">test (s)</th><th data-tip="devices.*.min_response_pct">min response (%)</th><th data-tip="devices.*.boost">boost</th><th data-tip="devices.*.windows">always on</th></tr></thead>
       <tbody id="devcfg"></tbody>
     </table></div>
-    <div class="note">NC = on when the coil is de-energised = on when the controller is dead. <code>pulse_off</code> requires NC. Service = seconds the device runs in the daily check (0 = not exercised). Min response in % saturation (0 = run but don't judge). Boost = runs in the boost.</div>
+    <div class="note">Output = what the device switches: one of the board's relays (NC = on while the coil is off = on when the controller is dead) or a Tuya plug over your network (no cloud; a saved local key shows as ******** and never leaves the board). Each relay or plug outlet belongs to one device, and a device with a trigger, test, boost or window needs one. A plug keeps its last state if ReefDO or the Wi-Fi dies — keep the aeration you rely on on an NC relay. <code>pulse_off</code> needs an NC relay. Test = seconds the device runs in the daily self test (0 = not tested). Min response in % saturation (0 = run but don't judge). Boost = runs in the boost. Always on = up to 4 daily windows, e.g. <code>08:00-20:00, 22:00-23:30</code>.</div>
   </div>
 
+
   <div class="card">
-    <h3>Service run</h3>
+    <h3>Self test</h3>
     <div class="form">
-      <label class="f">window start <input type="time" data-k="service.window.0"></label>
-      <label class="f">window end (≤ night start) <input type="time" data-k="service.window.1"></label>
-      <label class="f">settle between devices (s) <input data-k="service.settle_s"></label>
-      <label class="f">tail after switch-off (s) <input data-k="service.tail_s"></label>
-      <label class="f">min headroom from 100 % (%) <input data-k="service.min_headroom_pct"></label>
-      <label class="f">inconclusive days before alert <input data-k="service.inconclusive_days"></label>
-      <label class="f">induce deficit (s, 0 = off) <input data-k="service.induce_deficit_s"></label>
-      <label class="f">induce deficit device <input data-k="service.induce_deficit_device"></label>
+      <label class="f">window start <input type="time" data-k="test.window.0"></label>
+      <label class="f">window end (≤ night start) <input type="time" data-k="test.window.1"></label>
+      <label class="f">settle between devices (s) <input data-k="test.settle_s"></label>
+      <label class="f">tail after switch-off (s) <input data-k="test.tail_s"></label>
+      <label class="f">min headroom from 100 % (%) <input data-k="test.min_headroom_pct"></label>
+      <label class="f">inconclusive days before alert <input data-k="test.inconclusive_days"></label>
+      <label class="f">induce deficit (s, 0 = off) <input data-k="test.induce_deficit_s"></label>
+      <label class="f">induce deficit device <input data-k="test.induce_deficit_device"></label>
+      <label class="f">no FAIL from a start at or above (mg/L, 0 = off) <input data-k="test.no_fail_above_mgl"></label>
     </div>
     <div class="row" style="margin-top:10px">
       <label class="c"><input type="checkbox" data-k="escalate_if_failed"> escalate one level deeper if a device failed its check</label>
-      <label class="c"><input type="checkbox" data-k="service.chirp"> chirp at start</label>
+      <label class="c"><input type="checkbox" data-k="test.chirp"> chirp at start</label>
+      <label class="c"><input type="checkbox" data-k="test.exclusive" onchange="exclusiveUi()"> exclusive: only the tested device runs (needed for the checks)</label>
     </div>
   </div>
 
@@ -318,7 +330,7 @@ h2{font-size:16px;margin:18px 0 10px}
       <label class="f">buzzer tone (Hz) <input data-k="signals.buzzer_hz"></label>
       <label class="f">LED brightness (%) <input data-k="signals.led_brightness"></label>
     </div>
-    <div class="note">Normal is silent; ack and maintenance mute everything. LED codes are fixed: green steady = OK online, green 0.5 Hz = OK offline, blue 1 Hz / yellow 2 Hz / red 4 Hz = alert, purple 2 Hz = FAULT, cyan = maintenance, white pulse = service run.</div>
+    <div class="note">Normal is silent; ack and maintenance mute everything. LED codes are fixed: green steady = OK online, green 0.5 Hz = OK offline, blue 1 Hz / yellow 2 Hz / red 4 Hz = alert, blue/red alternating = FAULT, cyan = maintenance, white pulse = test run, purple flash = a device failed its last check.</div>
   </div>
 
   <div class="card">
@@ -347,16 +359,17 @@ h2{font-size:16px;margin:18px 0 10px}
 </section>
 
 <section id="maint" class="stack">
+  <h2 style="margin-top:0">ReefDO maintenance</h2>
   <div class="card">
     <div class="row" style="justify-content:space-between">
-      <div><h3 style="margin-bottom:2px">Maintenance mode</h3><div class="note" style="margin:0">Mutes the buzzer and enables the tests below for 30 min. The ladder keeps running; level-driven devices still win.</div></div>
+      <div><h3 style="margin-bottom:2px">Maintenance mode</h3><div class="note" style="margin:0">For work on the controller itself. Mutes the buzzer and enables air calibration and the firmware update for 30 min, then ends by itself — a forgotten maintenance cannot keep the alarm quiet. Entering it again restarts the 30 min. The ladder keeps running.</div></div>
       <button class="btn" id="maintbtn" onclick="toggleMaint()">Enter maintenance</button>
     </div>
   </div>
   <div class="grid">
-    <div class="card"><h3>Relay test</h3>
-      <div class="devs" id="relaytest"></div>
-      <div class="note">Forces the device on for 5 s, then back to automatic. Check the device — and the multimeter on COM/NO/NC the first time.</div>
+    <div class="card"><h3>Device test</h3>
+      <div class="devs" id="devtest"></div>
+      <div class="note">Switches the device on by hand for 5 s, through its relay or plug, then back to automatic — the same as <em>on</em>, then <em>auto</em> on its card. Check the device — and the multimeter on COM/NO/NC the first time.</div>
     </div>
     <div class="card"><h3>Air calibration</h3>
       <div class="note" style="margin:0 0 8px">Probe in water-saturated air (sealed cup over a wet sponge, not touching water), shaded, 180 s to settle.</div>
@@ -367,6 +380,12 @@ h2{font-size:16px;margin:18px 0 10px}
       <div class="prog"><i id="otaprog"></i></div>
       <div class="row" style="margin-top:8px"><button class="btn maint-only" disabled onclick="ota()">Upload &amp; reboot</button><span class="muted" style="font-size:13px">rollback armed until the new image proves itself</span></div>
     </div>
+  </div>
+
+  <h2>Device maintenance</h2>
+  <div class="card">
+    <div class="note" style="margin:0 0 8px">For work on a device: cleaning the skimmer, a pump, an airstone. Takes that one device out of order — it stays off, even if an alert wants it, until the time runs out or you put it back. Separate from ReefDO maintenance: no mode to enter, and the alarm keeps working. Lives in RAM only: a reboot or power loss puts every device back in order (an NC device runs again), so unplug anything you put your hands into.</div>
+    <div style="overflow-x:auto"><table><thead><tr><th>#</th><th>device</th><th>state</th><th>out for</th><th></th></tr></thead><tbody id="devmaint"></tbody></table></div>
   </div>
 </section>
 
@@ -443,7 +462,7 @@ function show(id){
   nav.querySelectorAll('a').forEach(a=>a.classList.toggle('on',a.getAttribute('href')==='#'+id));
   if(id==='chart') drawChart();
   if(id==='events') loadEvents();
-  if(id==='service') loadService();
+  if(id==='test') loadTest();
   if(id==='config') loadConfig();
   if(id==='setup') loadSetup();
   if(id==='export') $('lastseq').textContent=localStorage.getItem('lastseq')||'0';
@@ -455,14 +474,33 @@ let ST=null, CFG=null, WIFI=null;
 function pill(el,s){
   const maint=s.ladder.maintenance, fault=s.ladder.fault, lv=s.ladder.effective;
   el.className='pill '+(maint?'lv-maint':fault?'lv-fault':'lv-'+lv);
-  el.innerHTML='<span class="dot"></span>'+(maint?'MAINTENANCE':fault?'FAULT':lv.toUpperCase())+(s.ladder.silenced?' · silenced':'');
+  el.innerHTML='<span class="dot"></span>'+(maint?'MAINTENANCE · '+fmtLeft(s.ladder.maintenance_s):fault?'FAULT':lv.toUpperCase())+(s.ladder.silenced?' · silenced':'');
 }
+function fmtLeft(s){ return s>=3600?Math.floor(s/3600)+' h '+String(Math.floor(s%3600/60)).padStart(2,'0')+' min':Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
 function devCard(d,i){
-  const state=d.pulse?(d.on?'RUNNING':'PULSED OFF'):(d.on?'ON':'off');
-  return `<div class="dev ${d.on?'on':''}"><div class="n"><span>${i+1} · ${d.name}</span><span class="tag ${d.trigger}">${d.trigger}</span></div>
-    <div class="st"><span>${state}${d.pulse?' · pulse':''}</span><span>${d.wired}${d.energised?' · coil on':''}</span></div>
-    <div class="st"><span>${d.failed?'<b style="color:var(--red)">service FAIL</b>':(d.service_s?'service '+d.service_s+' s':'not exercised')}</span></div></div>`;
+  const out=d.suspend_s>0, why=(d.why||[]).join(' + ');
+  const state=out?'OUT OF ORDER':d.pulse?(d.on?'RUNNING':'PULSED OFF'):(d.on?'ON':'off');
+  const testing=ST&&ST.test.running&&ST.test.exclusive, m=d.manual;
+  const opt=(v,label,tip)=>`<button class="${m===v?'on':''}" ${testing&&v!==null?'disabled':''} title="${testing&&v!==null?'An exclusive test is running':tip}" onclick="manual(${i+1},${v})">${label}</button>`;
+  const man=d.pulse||out?'':`<span class="seg">${opt(null,'auto','Follow the ladder, windows, test and boost')}${opt(true,'on','On by hand until the next scheduled or triggered change')}${opt(false,'off','Off by hand until the next scheduled or triggered change')}</span>`;
+  return `<div class="dev ${out?'out':d.on?'on':''}"><div class="n"><span>${i+1} · ${d.name}</span><span class="tag ${d.trigger}">${d.trigger}</span></div>
+    <div class="st"><span>${state}${d.pulse?' · pulse':''}</span><span>${outputText(d)}</span></div>
+    <div class="st"><span>${out?'<b style="color:var(--red)">'+fmtLeft(d.suspend_s)+' left</b>'+(why?' · wanted: '+why:''):m===false?'off by hand'+(why?' · wanted: '+why:''):(why||'—')}</span></div>
+    ${man?`<div class="st" style="justify-content:flex-start" title="Manual control: until the next scheduled or triggered change">${man}</div>`:''}
+    <div class="st"><span>${d.failed?'<b style="color:var(--red)">test FAIL</b>':(d.test_s?'test '+d.test_s+' s':'not tested')}</span></div></div>`;
 }
+function outputText(d){ const s=d.slot||{}; return s.type==='relay'?'relay '+s.channel+' · '+s.wiring+(d.energised?' · coil on':''):s.type==='tuya'?plugState(d.link||{}):'no output'; }
+function plugState(t){ return t.state==='lost'?`<b style="color:var(--red)" title="${t.error}">plug LOST</b>`:t.state==='ok'?'plug':`<span title="${t.error}">plug …</span>`; }
+async function manual(n,on){ await cmd({manual:{device:n,on:on}},on===null?'Device '+n+' automatic':'Device '+n+(on?' on':' off')+' until the next scheduled or triggered change'); }
+const SUS_MIN={};
+function devMaint(){
+  if(!ST) return;
+  $('devmaint').innerHTML=ST.devices.map((d,i)=>{ const n=i+1, out=d.suspend_s>0, m=SUS_MIN[n]||30;
+    return `<tr><td>${n}</td><td>${d.name}</td><td>${out?'<b style="color:var(--red)">out · '+fmtLeft(d.suspend_s)+' left</b>':(d.on?'on':'off')}</td>
+      <td>${sel([5,10,15,30,60,120],m,`onchange="SUS_MIN[${n}]=+this.value"`)} min</td>
+      <td>${out?`<button class="btn sm" onclick="suspendDev(${n},0)">Put back</button> <button class="btn sm" onclick="suspendDev(${n},SUS_MIN[${n}]||30)" title="Restart the timer">Extend</button>`:`<button class="btn sm" onclick="suspendDev(${n},SUS_MIN[${n}]||30)">Take out</button>`}</td></tr>`; }).join('');
+}
+async function suspendDev(n,min){ await cmd({suspend:{device:n,s:min*60}},min?'Device '+n+' out of order for '+min+' min':'Device '+n+' back in order'); }
 async function refresh(){
   try{ ST=await getJ('/api/status'); }catch(e){ $('do-probe').textContent='no answer: '+e.message; return; }
   const s=ST, p=s.probe, l=s.ladder;
@@ -480,10 +518,11 @@ async function refresh(){
   $('th-red').textContent='< '+l.enters_below.red.toFixed(2)+' · leaves > '+l.leaves_above.red.toFixed(2);
   const alarm=l.effective!=='normal'||l.fault;
   $('ackbtn').disabled=!alarm||l.silenced; $('acknote').textContent=alarm?(l.silenced?'silenced':'silences the buzzer and ack devices for a while; the level stays'):'nothing to acknowledge';
-  $('svc-window').textContent=s.service.window_start+' – '+s.service.window_end;
-  $('svc-state').textContent=s.service.running?('running · device '+s.service.device+' · '+s.service.phase):'idle'+(s.service.inconclusive_alert?' · inconclusive streak':'');
+  $('svc-window').textContent=s.test.window_start+' – '+s.test.window_end;
+  $('svc-state').textContent=s.test.running?('running · device '+s.test.device+' · '+s.test.phase):'idle'+(s.test.inconclusive_alert?' · inconclusive streak':'')+(s.test.exclusive?'':' · checks off (not exclusive)');
   $('boost-state').textContent=s.boost.enabled?(s.boost.window_start+' – '+s.boost.window_end+' · to '+s.boost.target_mgl.toFixed(2)+' mg/L'+(s.boost.running?' · running':'')):'off';
   $('devs').innerHTML=s.devices.map(devCard).join('');
+  devMaint();
   $('sys-up').textContent=fmtUp(s.uptime_s); $('sys-fw').textContent=s.fw+(WIFI&&WIFI.partition?' · '+WIFI.partition+' · '+WIFI.image:'');
   $('sys-time').textContent=s.clock_known?fmtTime(s.unix)+' (tz '+(s.tz/3600)+' h)':'unknown';
   $('sys-loga').textContent=s.log.a+' / '+s.log.a_capacity+' records';
@@ -493,7 +532,7 @@ async function refresh(){
   $('tsrc').textContent='🕒 '+(s.clock_known?(WIFI&&WIFI.ntp?'NTP':'set'):'—');
   const maint=l.maintenance;
   document.querySelectorAll('.maint-only').forEach(b=>b.disabled=!maint);
-  $('maintbtn').textContent=maint?'Leave maintenance':'Enter maintenance';
+  $('maintbtn').textContent=maint?'Leave maintenance ('+fmtLeft(l.maintenance_s)+' left)':'Enter maintenance';
   if(!window._pushedTime && (!s.clock_known || (AUTH && s.tz!==tzHere()))){ window._pushedTime=true; pushTime(true); }
   if(CFG){ $('heat-th').textContent=CFG.heat.on_c+' on / '+CFG.heat.off_c+' off'; $('nightlock').textContent=CFG.night.lock?'on · '+CFG.night.start+'–'+CFG.night.end:'off'; }
 }
@@ -556,7 +595,7 @@ async function drawChart(){
     data.forEach(d=>{ c.fillStyle=css('--'+(LEVEL[d.level_max]==='normal'?'green':LEVEL[d.level_max])); c.fillRect(X(d.ts),H-B+24,Math.max(1,w/data.length+0.5),6); });
   }
   // events in range: level changes as dashed lines in the new level's colour, fault, ack, boot, calibration
-  // as lettered ticks, service runs as a shaded band
+  // as lettered ticks, test runs as a shaded band
   await loadEventsData();
   c.font='10px system-ui';
   const marks=[]; // {x, text} for the hover readout
@@ -568,7 +607,7 @@ async function drawChart(){
     const x=X(r.ts);
     if(r.type===10){ const t=r.aux&255;
       if(t===0) runStart=r.ts;
-      if(t===3&&runStart!=null){ c.fillStyle=css('--white'); c.globalAlpha=.3; c.fillRect(X(runStart),T,Math.max(2,x-X(runStart)),h); c.globalAlpha=1; c.fillStyle=css('--muted'); c.fillText('S',X(runStart)+2,T+11); marks.push({x:X(runStart),text:fmtTime(runStart)+'  Service run start'}); marks.push({x,text:fmtTime(r.ts)+'  Service run end'}); runStart=null; }
+      if(t===3&&runStart!=null){ c.fillStyle=css('--white'); c.globalAlpha=.3; c.fillRect(X(runStart),T,Math.max(2,x-X(runStart)),h); c.globalAlpha=1; c.fillStyle=css('--muted'); c.fillText('T',X(runStart)+2,T+11); marks.push({x:X(runStart),text:fmtTime(runStart)+'  Test start'}); marks.push({x,text:fmtTime(r.ts)+'  Test end'}); runStart=null; }
       if(t===2&&((r.aux>>16)&255)===2) mark(x,'--red','F',r);
       continue; }
     if(r.type===11){ const t=r.aux&255;
@@ -593,7 +632,7 @@ async function drawChart(){
     c.fillStyle=css('--purple'); for(let v=Math.ceil(tmin);v<=tmax;v++) c.fillText(v+'°',6,TY(v)+4);
   }
   c.fillStyle=css('--muted'); c.fillText('mg/L',L+w+6,T+2); if(showT){ c.fillStyle=css('--purple'); c.fillText('°C',6,T+2); }
-  $('legend').innerHTML=`<span><i style="background:var(--text)"></i>DO mg/L</span><span><i style="background:var(--blue)"></i>Blue ${TH.blue.mgl} ± ${TH.blue.hysteresis}</span><span><i style="background:var(--yellow)"></i>Yellow ${TH.yellow.mgl} ± ${TH.yellow.hysteresis}</span><span><i style="background:var(--red)"></i>Red ${TH.red.mgl} ± ${TH.red.hysteresis}</span><span><i style="background:var(--line);height:10px"></i>night ${CFG.night.start}–${CFG.night.end}</span><span>level strip at bottom</span><span>dashed = level change · S service run · ! fault · A ack · B boot · C calibration · F failed check</span>`;
+  $('legend').innerHTML=`<span><i style="background:var(--text)"></i>DO mg/L</span><span><i style="background:var(--blue)"></i>Blue ${TH.blue.mgl} ± ${TH.blue.hysteresis}</span><span><i style="background:var(--yellow)"></i>Yellow ${TH.yellow.mgl} ± ${TH.yellow.hysteresis}</span><span><i style="background:var(--red)"></i>Red ${TH.red.mgl} ± ${TH.red.hysteresis}</span><span><i style="background:var(--line);height:10px"></i>night ${CFG.night.start}–${CFG.night.end}</span><span>level strip at bottom</span><span>dashed = level change · T test run · ! fault · A ack · B boot · C calibration · F failed check</span>`;
   const ro=$('readout');
   cv.onmousemove=cv.ontouchmove=ev=>{ const r=cv.getBoundingClientRect(); const px=(ev.touches?ev.touches[0].clientX:ev.clientX)-r.left; if(px<L||px>L+w){ro.style.display='none';return;} const t=t0+(px-L)/w*(now-t0); let i=0; while(i<data.length-1&&data[i+1].ts<t) i++; const d=data[i]; const v=days<=1?d.do:d.do_avg; ro.style.display='block'; const near=marks.filter(m=>Math.abs(m.x-px)<=4).map(m=>m.text); ro.textContent=near.length?near.join('\n'):fmtTime(d.ts)+'  '+v.toFixed(2)+' mg/L'+(days<=1?'  '+d.sat.toFixed(1)+' %':''); };
   cv.onmouseleave=()=>ro.style.display='none';
@@ -602,10 +641,12 @@ async function drawChart(){
 // ---------- events ----------
 const TYPE={3:'Boot',4:'Fault',5:'Config',6:'Correction',7:'Command',8:'TimeSync',9:'Daily'};
 const LADDER_EV=['Level','Effective level','FAULT','FAULT cleared','Ack','Pulse off','Heat on','Heat off'];
-const SVC_EV=['Service run start','Device start','Device end','Service run end','Service skipped','Service FAIL','Service fail cleared','Service inconclusive'];
+const SVC_EV=['Test start','Device start','Device end','Test end','Test skipped','Test FAIL','Test fail cleared','Test inconclusive'];
 const BOOST_EV=['Boost start','Boost target reached','Boost window end','Boost paused'];
 const OUTCOME=['—','pass','FAIL','inconclusive','unchecked'];
-const SKIP=['not Normal','fault','maintenance','missed','nothing to run'];
+const SKIP=['not Normal','fault','maintenance','missed','nothing to run','a tested device is out of order'];
+// A missed response let off because the device started at or above test.no_fail_above_mgl (flag 8).
+const highDo=r=>r.flags&8?' · missed the target, but DO was '+r.f1.toFixed(2)+' mg/L (no FAIL at or above '+r.f2.toFixed(2)+')':'';
 function describe(r){
   const dev=i=>(i+1)+' · '+(CFG&&CFG.devices[i+1]?CFG.devices[i+1].name:'device');
   if(r.type===2){ const t=r.aux&255, d=(r.aux>>8)&255, from=LEVEL[r.flags&255], to=LEVEL[(r.flags>>8)&255];
@@ -613,17 +654,27 @@ function describe(r){
     if(t===5) return ['blue', 'Pulse off · '+dev(d), '']; return [t===2?'fault':'normal', LADDER_EV[t]||('event '+t), r.f0?r.f0.toFixed(2)+' mg/L':''];
   }
   if(r.type===10){ const t=r.aux&255, d=(r.aux>>8)&255, o=(r.aux>>16)&255, sk=(r.aux>>24)&255;
-    if(t===2) return [o===2?'fail':'service', 'Device end · '+dev(d), OUTCOME[o]+' · '+r.f0.toFixed(1)+' %'];
-    if(t===4) return ['service','Service skipped',SKIP[sk]||''];
-    if(t===5) return ['fail','Service FAIL · '+dev(d), r.f0.toFixed(1)+' %'];
-    return ['service', SVC_EV[t]||('service '+t), t===1?dev(d):''];
+    if(t===2) return [o===2?'fail':'test', 'Device end · '+dev(d), OUTCOME[o]+' · '+r.f0.toFixed(1)+' %'+highDo(r)];
+    if(t===4) return ['test','Test skipped',SKIP[sk]||''];
+    if(t===5) return ['fail','Test FAIL · '+dev(d), r.f0.toFixed(1)+' %'];
+    return ['test', SVC_EV[t]||('test '+t), t===1?dev(d):''];
   }
   if(r.type===11) return ['boost', BOOST_EV[r.aux&255]||('boost '+(r.aux&255)), r.f0.toFixed(2)+' of '+r.f1.toFixed(2)+' mg/L'];
   if(r.type===6) return ['system','Correction '+(r.aux===0?'(boot)':r.aux===1?'(daily)':'(changed)'), '×'+r.f0.toFixed(3)+' '+(r.f1>=0?'+':'')+r.f1.toFixed(2)];
   if(r.type===9) return ['system','Daily summary','min '+r.f0.toFixed(2)+' · avg '+r.f1.toFixed(2)+' · max '+r.f2.toFixed(2)+' mg/L · temp '+r.f3.toFixed(1)];
   if(r.type===8) return ['system','TimeSync','offset '+r.f0.toFixed(0)+' s'];
   if(r.type===3) return ['system','Boot','reason '+r.aux];
-  if(r.type===7) return ['system','Command '+(r.aux===1?'maintenance on':r.aux===2?'maintenance off':'air calibration'),''];
+  if(r.type===7){ const t=r.aux&255, d=(r.aux>>8)&255;
+    if(t===4) return ['fail','Out of order · '+dev(d), 'for '+Math.round(r.f0/60)+' min'];
+    if(t===5) return ['system','Back in order · '+dev(d), ['by command','time ran out'][r.f1|0]||''];
+    if(t===6) return ['system','Manual on · '+dev(d), ''];
+    if(t===7) return ['system','Manual off · '+dev(d), ''];
+    if(t===8) return ['system','Automatic again · '+dev(d), ['by command','a schedule or trigger took over','a test started'][r.f1|0]||''];
+    if(t===9) return ['fail','Plug lost · '+dev(d), ['','no connection','send failed','no answer','unreadable answer','wrong key','refused','crypto failure'][r.f0|0]||''];
+    if(t===10) return ['system','Plug back · '+dev(d), ''];
+    if(t===2) return ['system','Maintenance off', ['by command','its 30 min ran out'][r.f1|0]||''];
+    return ['system',t===1?'Maintenance on':'Command air calibration',''];
+  }
   return ['system',TYPE[r.type]||('type '+r.type),''];
 }
 let EVENTS=[];
@@ -635,22 +686,22 @@ async function loadEventsData(){
 async function loadEvents(){
   if(!CFG) await loadConfig(true);
   await loadEventsData();
-  const col={normal:'--green',blue:'--blue',yellow:'--yellow',red:'--red',fault:'--purple',fail:'--red',service:'--white',boost:'--cyan',system:'--muted'};
+  const col={normal:'--green',blue:'--blue',yellow:'--yellow',red:'--red',fault:'--purple',fail:'--red',test:'--white',boost:'--cyan',system:'--muted'};
   $('evcount').textContent=EVENTS.length+' events';
   document.querySelector('#evtable tbody').innerHTML=EVENTS.slice().reverse().map(r=>{ const [k,m,v]=describe(r); const t=r.ts?fmtTime(r.ts):'boot+'+r.uptime_s+' s'; return `<tr><td class="mono muted" style="white-space:nowrap">${t}</td><td><span class="ev" style="background:var(${col[k]||'--muted'})"></span>${m}</td><td class="muted">${v}</td></tr>`; }).join('');
 }
 
-// ---------- service ----------
-async function loadService(){
-  let s; try{ s=await getJ('/api/service'); }catch(e){ toast('Service failed: '+e.message); return; }
+// ---------- self test ----------
+async function loadTest(){
+  let s; try{ s=await getJ('/api/test'); }catch(e){ toast('Test failed: '+e.message); return; }
   if(!CFG) await loadConfig(true);
-  $('svc-win2').textContent=(ST?ST.service.window_start+' – '+ST.service.window_end:'')+(s.running?' · running':'');
-  $('svc-note').textContent='Starts at the first sample inside the window with at least '+CFG.service.min_headroom_pct+' % headroom from 100 %; otherwise at the end, inconclusive.'+(s.inconclusive_alert?' Inconclusive '+s.inconclusive_streak+' evenings running.':'');
+  $('svc-win2').textContent=(ST?ST.test.window_start+' – '+ST.test.window_end:'')+(s.running?' · running':'');
+  $('svc-note').textContent='Starts at the first sample inside the window with at least '+CFG.test.min_headroom_pct+' % headroom from 100 %; otherwise at the end, inconclusive.'+(s.no_fail_above_mgl>0?' A device that misses its response after starting at or above '+s.no_fail_above_mgl.toFixed(2)+' mg/L is unchecked, not FAIL.':'')+(s.inconclusive_alert?' Inconclusive '+s.inconclusive_streak+' evenings running.':'');
   $('svc-dur').textContent='a run takes '+Math.round(s.run_duration_s/60)+' min';
-  document.querySelector('#svctable tbody').innerHTML=s.devices.map((d,i)=>d.service_s?`<tr><td>${i+1} · ${d.name}</td><td>${d.last_response.toFixed(1)} %</td><td style="color:var(${d.last_outcome==='fail'?'--red':d.last_outcome==='pass'?'--green':'--muted'})">${d.last_outcome}${d.fail_active?' · alert active':''}</td></tr>`:'').join('')||'<tr><td class="muted">no device has service_s &gt; 0</td></tr>';
+  document.querySelector('#svctable tbody').innerHTML=s.devices.map((d,i)=>d.test_s?`<tr><td>${i+1} · ${d.name}</td><td>${d.last_response.toFixed(1)} %</td><td style="color:var(${d.last_outcome==='fail'?'--red':d.last_outcome==='pass'?'--green':'--muted'})">${d.last_outcome}${d.fail_active?' · alert active':''}</td></tr>`:'').join('')||'<tr><td class="muted">no device has test_s &gt; 0</td></tr>';
   $('svc-last').textContent=s.devices.some(d=>d.fail_active)?'FAIL active':s.devices.some(d=>d.last_outcome==='pass')?'pass':'—';
   if(!EVENTS.length) await loadEvents();
-  document.querySelector('#svchist tbody').innerHTML=EVENTS.filter(r=>r.type===10).slice().reverse().slice(0,60).map(r=>{ const t=r.aux&255,d=(r.aux>>8)&255,o=(r.aux>>16)&255; return `<tr><td class="mono muted">${r.ts?fmtTime(r.ts):'boot+'+r.uptime_s+' s'}</td><td>${SVC_EV[t]}</td><td>${[1,2,5,6].includes(t)?(d+1)+' · '+(CFG.devices[d+1]?CFG.devices[d+1].name:''):''}</td><td>${t===2||t===5?r.f0.toFixed(1)+' %':''}</td><td>${t===2?OUTCOME[o]:t===4?SKIP[(r.aux>>24)&255]||'':''}</td></tr>`; }).join('');
+  document.querySelector('#svchist tbody').innerHTML=EVENTS.filter(r=>r.type===10).slice().reverse().slice(0,60).map(r=>{ const t=r.aux&255,d=(r.aux>>8)&255,o=(r.aux>>16)&255; return `<tr><td class="mono muted">${r.ts?fmtTime(r.ts):'boot+'+r.uptime_s+' s'}</td><td>${SVC_EV[t]}</td><td>${[1,2,5,6].includes(t)?(d+1)+' · '+(CFG.devices[d+1]?CFG.devices[d+1].name:''):''}</td><td>${t===2||t===5?r.f0.toFixed(1)+' %':''}</td><td>${t===2?OUTCOME[o]+highDo(r):t===4?SKIP[(r.aux>>24)&255]||'':''}</td></tr>`; }).join('');
 }
 
 // ---------- tooltips: one sentence per setting, keyed by config path (devices.N → devices.*) ----------
@@ -660,29 +711,33 @@ const TIPS={
  'levels.*.dwell_s':'How long DO must stay below the entry value before the level activates. 0 = at once. Deeper levels should react faster.',
  'recover_sustain_s':'How long DO must stay above the exit value before the ladder steps one level back up. Going deeper is always immediate.',
  'levels.blue.slope_mgl_per_10min':'Also enter Blue when DO is falling faster than this (mg/L per 10 minutes) even if it is still above the threshold — catches a stopped pump early. 0 = off.',
- 'devices.*.name':'Whatever is wired to this relay: air pump, powerhead, siren…',
- 'devices.*.wired':'NC: the device is ON while the relay coil is off, so a dead controller leaves it running (fail-safe for aeration). NO: the device is on only while the coil is powered.',
+ 'devices.*.name':'What this device is: air pump, powerhead, siren…',
+ 'devices.*.slot':'What this device switches: one of the board\'s relays, a Tuya plug on your network, or nothing. Each relay or plug outlet belongs to one device. The fields beside it are that output\'s own settings.',
  'devices.*.trigger':'Which alert switches this device on. Levels are cumulative: a Yellow device is also on at Red. heat = on when the water is too warm. none = unused.',
  'devices.*.mode':'on = switched on for the whole alert. pulse_off = cut once for a few seconds when the level activates, to restart a stalled DC pump; needs NC wiring.',
  'devices.*.ack_silences':'Acknowledging the alarm switches this device off for the ack-silence time — for sirens and beacons. Such a device is never on at Blue.',
- 'devices.*.service_s':'Seconds the device runs during the evening service check, so a clogged airstone or a stuck pump is found before the night. 0 = not exercised.',
+ 'devices.*.test_s':'Seconds the device runs during the evening self test, so a clogged airstone or a stuck pump is found before the night. 0 = not exercised.',
  'devices.*.min_response_pct':'Saturation change the check must see while this device runs to count it as working; less = FAIL alert. 0 = run it but do not judge.',
- 'service.window.0':'The daily service check runs inside this window — before the night lock, while someone can still react.',
- 'service.window.1':'End of the window; must not be later than the night start.',
- 'service.settle_s':'Pause between two devices so their effects do not overlap in the measurement.',
- 'service.tail_s':'How long the measurement continues after a device is switched off (the response peaks late).',
- 'service.min_headroom_pct':'The run starts only when saturation is at least this far from 100 %, so a working device can make a visible difference. If that never happens, it runs at the window end and is marked inconclusive.',
- 'service.inconclusive_days':'Alert after this many evenings without a usable check.',
- 'service.induce_deficit_s':'Optional: before the check, cut one device for this many seconds to create a small oxygen deficit so the check has something to measure. 0 = off.',
- 'service.induce_deficit_device':'The device (1..6) to cut for the induced deficit — normally the return pump.',
+ 'test.window.0':'The daily self test runs inside this window — before the night lock, while someone can still react.',
+ 'test.window.1':'End of the window; must not be later than the night start.',
+ 'test.settle_s':'Pause between two devices so their effects do not overlap in the measurement.',
+ 'test.tail_s':'How long the measurement continues after a device is switched off (the response peaks late).',
+ 'test.min_headroom_pct':'The run starts only when saturation is at least this far from 100 %, so a working device can make a visible difference. If that never happens, it runs at the window end and is marked inconclusive.',
+ 'test.inconclusive_days':'Alert after this many evenings without a usable check.',
+ 'test.induce_deficit_s':'Optional: before the check, cut one device for this many seconds to create a small oxygen deficit so the check has something to measure. 0 = off.',
+ 'test.induce_deficit_device':'The device number to cut for the induced deficit — normally the return pump.',
  'escalate_if_failed':'If a device failed its last check, an alert whose devices include it acts one level deeper — a Blue that relies on a dead bubbler becomes an audible Yellow.',
- 'service.chirp':'Short beep when a service run starts.',
+ 'test.chirp':'Short beep when a test run starts.',
  'devices.*.boost':'Run this device during the boost.',
- 'boost.enabled':'Once a day, inside the window, run the boost devices until DO reaches the target or the window ends. Pauses for a service run or maintenance.',
- 'boost.window.0':'Start of the daily boost window (local time). By default it follows the service window, so the check runs on a quiet tank first.',
+
+ 'devices.*.windows':'Daily times this device is always on, e.g. 08:00-20:00 (up to 4, comma-separated; 22:00-02:00 wraps midnight). Any alert, test run, boost or manual switch still turns it on outside them; only device maintenance switches it off. Not for pulse or alarm devices.',
+ 'test.no_fail_above_mgl':'Near saturation a working aerator can barely move DO, so a miss up there proves little: a device that misses its response after starting at or above this DO (mg/L) is logged as unchecked, with the reason, instead of FAIL. Tests still run and pass as usual. About 90 % saturation at 25 °C and 35 psu is 6.1 mg/L. 0 = off.',
+ 'test.exclusive':'During a test run only the device under test runs: windows pause and manual switches end. Needed for any measured check (min response, induced deficit, inconclusive alert). Off: the devices are still exercised every evening, but nothing is measured or judged and old verdicts are cleared.',
+ 'boost.enabled':'Once a day, inside the window, run the boost devices until DO reaches the target or the window ends. Pauses for a test run or maintenance.',
+ 'boost.window.0':'Start of the daily boost window (local time). By default it follows the test window, so the check runs on a quiet tank first.',
  'boost.window.1':'End of the boost window; the run stops here even if the target was not reached.',
  'boost.target_mgl':'DO (mg/L) at which the boost stops early.',
- 'night.start':'Start of the night hours (for the night lock and the service window rule).',
+ 'night.start':'Start of the night hours (for the night lock and the test window rule).',
  'night.end':'End of the night hours.',
  'night.lock':'Once an alert triggers at night, hold at least Blue until morning even if DO recovers — the devices keep running through the risky hours.',
  'night.unknown_time_is_night':'If the board does not know the time, treat it as night (the safe assumption).',
@@ -705,7 +760,7 @@ const TIPS={
  'signals.led_brightness':'Brightness of the status LED (0..100 %). The colour codes are fixed.',
  'ntfy.enabled':'Send push notifications through ntfy.sh — one HTTPS POST per event, from the board itself.',
  'ntfy.topic':'Your ntfy topic (subscribe to it in the ntfy app). Treat it like a password: anyone who knows it can read the pushes.',
- 'ntfy.min_level':'Lowest alert level that sends a push. FAULT, service failures and reboots are always sent when enabled.',
+ 'ntfy.min_level':'Lowest alert level that sends a push. FAULT, test failures and reboots are always sent when enabled.',
 };
 function tipFor(k){ return TIPS[k]||TIPS[k.replace(/\.\d+\./,'.*.').replace(/\.(normal|blue|yellow|red|fault)\./,'.*.')]||''; }
 function applyTips(){
@@ -722,15 +777,58 @@ async function loadConfig(quiet){
   if(quiet) return;
   const c=CFG;
   $('lvcfg').innerHTML=['blue','yellow','red'].map(k=>{ const l=c.levels[k]; return `<tr><td><span class="tag ${k}">${k}</span></td><td><input class="mono" data-k="levels.${k}.mgl" size="5"></td><td><input class="mono" data-k="levels.${k}.hysteresis" size="5"></td><td><input class="mono" data-k="levels.${k}.dwell_s" size="4"></td><td class="mono">${(l.mgl-l.hysteresis).toFixed(2)}</td><td class="mono">${(l.mgl+l.hysteresis).toFixed(2)}</td></tr>`; }).join('');
-  $('devcfg').innerHTML=[1,2,3,4,5,6].map(n=>{ const d=c.devices[n]; return `<tr><td>${n}</td><td><input data-k="devices.${n}.name" size="14"></td><td>${sel(['NC','NO'],d.wired,`data-k="devices.${n}.wired"`)}</td><td>${sel(['none','blue','yellow','red','heat'],d.trigger,`data-k="devices.${n}.trigger"`)}</td><td>${sel(['on','pulse_off'],d.mode,`data-k="devices.${n}.mode"`)}</td><td><input type="checkbox" data-k="devices.${n}.ack_silences"></td><td><input class="mono" data-k="devices.${n}.service_s" size="4"></td><td><input class="mono" data-k="devices.${n}.min_response_pct" size="4"></td><td><input type="checkbox" data-k="devices.${n}.boost"></td></tr>`; }).join('');
+  await loadSlots();
+  $('devcfg').innerHTML=devNums(c).map(n=>{ const d=c.devices[n]; return `<tr><td>${n}</td><td><input data-k="devices.${n}.name" size="14"></td><td id="slot-${n}" class="slotcell">${slotEditor(n,d.slot||{type:'none'})}</td><td>${sel(['none','blue','yellow','red','heat'],d.trigger,`data-k="devices.${n}.trigger"`)}</td><td>${sel(['on','pulse_off'],d.mode,`data-k="devices.${n}.mode"`)}</td><td><input type="checkbox" data-k="devices.${n}.ack_silences"></td><td><input class="mono" data-k="devices.${n}.test_s" size="4"></td><td><input class="mono" data-k="devices.${n}.min_response_pct" size="4"></td><td><input type="checkbox" data-k="devices.${n}.boost"></td><td><input class="mono" data-win="${n}" size="18" placeholder="—" value="${(d.windows||[]).map(w=>w[0]+'-'+w[1]).join(', ')}"></td></tr>`; }).join('');
+
   $('sigcfg').innerHTML=['normal','blue','yellow','red','fault'].map(k=>{ const s=c.signals[k]; const silent=k==='normal'; return `<tr><td><span class="tag ${k==='fault'?'heat':k==='normal'?'none':k}">${k}</span></td><td>${silent?'<span class="muted">off</span>':sel(['off','chirp','beep','double','triple','continuous'],s.buzzer,`data-k="signals.${k}.buzzer"`)}</td><td>${silent?'':sel([0,1,2,3],s.volume,`data-k="signals.${k}.volume"`)}</td></tr>`; }).join('');
   document.querySelectorAll('#config [data-k]').forEach(el=>{ const v=get(c,el.dataset.k); if(el.type==='checkbox') el.checked=!!v; else el.value=v==null?'':v; });
   if(ST&&ST.correction) $('scalehint').textContent=ST.correction.seawater_scale_hint.toFixed(3);
   $('cfgmsg').className='note'; $('cfgmsg').textContent='schema '+c.schema;
   applyTips();
+  document.querySelectorAll('#config [data-win]').forEach(el=>{ const t=tipFor('devices.*.windows'); el.title=t; });
+  exclusiveUi();
+}
+const devNums=c=>Object.keys(c.devices).map(Number).sort((a,b)=>a-b);
+
+// ---------- output editors, built from the slot types' JSON Schema (GET /api/slots) ----------
+let SLOTS=null;
+async function loadSlots(){ if(SLOTS) return; try{ SLOTS=await getJ('/api/slots'); }catch(e){ SLOTS={none:{title:'no output',properties:{}}}; toast('Slot types failed: '+e.message); } }
+const esc=s=>String(s??'').replace(/[&<>"]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]));
+// One control per property: a list for names and small ranges, a number or a text box otherwise.
+function slotField(n,k,p,v){
+  const a=`data-slot="${n}" data-f="${k}" title="${esc(p.description)}"`;
+  let ctl;
+  if(p.enum) ctl=sel(p.enum,v,a);
+  else if(p.type==='integer' && p.maximum-p.minimum<=16) ctl=sel(Array.from({length:p.maximum-p.minimum+1},(_,i)=>p.minimum+i),v,a+' data-int');
+  else if(p.type==='integer') ctl=`<input class="mono" type="number" min="${p.minimum}" max="${p.maximum}" value="${esc(v)}" style="width:5em" ${a} data-int>`;
+  else ctl=`<input class="mono" value="${esc(v)}" maxlength="${p.maxLength}" size="${Math.min(p.maxLength,20)}" ${p.writeOnly?'autocomplete="off"':''} ${a}>`;
+  return `<label class="sf">${esc(p.title)} ${ctl}</label>`;
+}
+// The type, then that type's own fields (their defaults for a new type).
+function slotEditor(n,s){
+  const sch=SLOTS[s.type]||SLOTS.none;
+  const type=`<select data-slottype="${n}" onchange="slotType(${n},this.value)" title="${esc(tipFor('devices.*.slot'))}">${Object.keys(SLOTS).map(t=>`<option value="${t}" ${t===s.type?'selected':''}>${esc(SLOTS[t].title)}</option>`).join('')}</select>`;
+  return type+Object.entries(sch.properties||{}).map(([k,p])=>slotField(n,k,p,s[k]??p.default)).join('');
+}
+function slotType(n,t){ $('slot-'+n).innerHTML=slotEditor(n,{type:t}); }
+function collectSlot(n){
+  const s={type:document.querySelector(`[data-slottype="${n}"]`).value};
+  document.querySelectorAll(`[data-slot="${n}"]`).forEach(el=>{ s[el.dataset.f]=el.hasAttribute('data-int')?Number(el.value):el.value; });
+  return s;
+}
+// Without an exclusive test nothing is measured: the fields that only feed the checks are greyed out.
+function exclusiveUi(){
+  const on=document.querySelector('#config [data-k="test.exclusive"]').checked;
+  document.querySelectorAll('#config [data-k$=".min_response_pct"],#config [data-k="test.min_headroom_pct"],#config [data-k="test.inconclusive_days"],#config [data-k^="test.induce_deficit"],#config [data-k="test.no_fail_above_mgl"]').forEach(el=>el.disabled=!on);
+}
+// "08:00-20:00, 22:00-02:00" → [["08:00","20:00"],["22:00","02:00"]]; throws on anything else.
+function parseWindows(n,text){
+  const t=text.trim(); if(!t) return [];
+  return t.split(',').map(x=>{ const m=x.trim().match(/^(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})$/); if(!m) throw new Error('device '+n+' always on: "'+x.trim()+'" is not HH:MM-HH:MM'); return [m[1],m[2]]; });
 }
 function collectConfig(){
   const c=JSON.parse(JSON.stringify(CFG));
+  document.querySelectorAll('#config [data-win]').forEach(el=>set(c,'devices.'+el.dataset.win+'.windows',parseWindows(el.dataset.win,el.value)));
   document.querySelectorAll('#config [data-k]').forEach(el=>{
     const k=el.dataset.k; const old=get(CFG,k);
     let v=el.type==='checkbox'?el.checked:el.value;
@@ -738,21 +836,24 @@ function collectConfig(){
     if(el.tagName==='SELECT' && typeof old==='number') v=Number(v);
     set(c,k,v);
   });
+  devNums(c).forEach(n=>{ c.devices[n].slot=collectSlot(n); });
   return c;
 }
 async function saveConfig(){
-  try{ const r=await sendJ('/api/config',collectConfig(),'PUT'); const m=$('cfgmsg');
+  let doc; try{ doc=collectConfig(); }catch(e){ const m=$('cfgmsg'); m.className='warn'; m.textContent=e.message; return; }
+  try{ const r=await sendJ('/api/config',doc,'PUT'); const m=$('cfgmsg');
     if(r.ok){ m.className='ok'; m.textContent='Saved and applied.'; toast('Config saved'); await loadConfig(); refresh(); }
     else { m.className='warn'; m.textContent='Rejected at '+r.path+': '+r.message; }
   }catch(e){ toast('Failed: '+e.message); }
 }
-function downloadConfig(){ const a=document.createElement('a'); a.href='data:application/json,'+encodeURIComponent(JSON.stringify(collectConfig(),null,2)); a.download='reefdo-config.json'; a.click(); }
+function downloadConfig(){ let c; try{ c=collectConfig(); }catch(e){ toast(e.message); return; } const a=document.createElement('a'); a.href='data:application/json,'+encodeURIComponent(JSON.stringify(c,null,2)); a.download='reefdo-config.json'; a.click(); }
 async function buzzerTest(){ try{ const r=await sendForm('/api/buzzer-test',{pattern:$('bt-pattern').value,volume:$('bt-volume').value,hz:$('bt-hz').value,s:$('bt-s').value}); toast(r.ok?'Playing':'Rejected'); }catch(e){ toast('Failed: '+e.message); } }
 async function ntfyTest(){ try{ const r=await sendJ('/api/ntfy-test',{}); toast(r.ok?'Test push sent':'Push failed (topic set? saved? online?)'); }catch(e){ toast('Failed: '+e.message); } }
 
 // ---------- maintenance ----------
-function relayButtons(){ if(!ST) return; $('relaytest').innerHTML=ST.devices.map((d,i)=>`<button class="btn maint-only" ${ST.ladder.maintenance?'':'disabled'} onclick="relayTest(${i+1})">${i+1} · ${d.name}</button>`).join(''); }
-async function relayTest(n){ try{ await sendJ('/api/cmd',{relay:{device:n,on:true}}); toast('Device '+n+' forced on for 5 s'); setTimeout(()=>sendJ('/api/cmd',{relay:{device:n,on:null}}).then(refresh),5000); }catch(e){ toast('Failed: '+e.message); } }
+function testButtons(){ if(!ST) return; $('devtest').innerHTML=ST.devices.map((d,i)=>`<button class="btn" onclick="deviceTest(${i+1})">${i+1} · ${d.name}</button>`).join(''); }
+// The device test is the manual switch: on for 5 s, then automatic again.
+async function deviceTest(n){ try{ const r=await sendJ('/api/cmd',{manual:{device:n,on:true}}); if(!r.ok){ toast('Refused: '+r.message); return; } toast('Device '+n+' on for 5 s'); refresh(); setTimeout(()=>sendJ('/api/cmd',{manual:{device:n,on:null}}).then(refresh),5000); }catch(e){ toast('Failed: '+e.message); } }
 async function ota(){
   const f=$('otafile').files[0]; if(!f){ toast('Choose a .bin first'); return; }
   const el=$('otaprog'); el.style.width='30%';
@@ -777,8 +878,8 @@ async function saveWifi(){ try{ const r=await sendForm('/api/wifi',{ssid:$('wifi
 async function savePassword(){ try{ const pw=$('pw-new').value; const r=await sendForm('/api/passwd',{password:pw}); if(r.ok){ AUTH=btoa('reef:'+(pw||'reefdo')); localStorage.setItem('auth',AUTH); } toast(r.ok?'Password changed':'Rejected (max 32)'); }catch(e){ toast('Failed: '+e.message); } }
 
 // ---------- start ----------
-(async()=>{ if(AUTH){ try{ await getJ('/api/auth'); $('lock').textContent='🔓'; }catch(e){ AUTH=''; localStorage.removeItem('auth'); } } await loadConfig(true); await refresh(); await refreshWifi(); relayButtons(); show((location.hash||'#status').slice(1)); })();
-setInterval(async()=>{ await refresh(); relayButtons(); },5000);
+(async()=>{ if(AUTH){ try{ await getJ('/api/auth'); $('lock').textContent='🔓'; }catch(e){ AUTH=''; localStorage.removeItem('auth'); } } await loadConfig(true); await refresh(); await refreshWifi(); testButtons(); show((location.hash||'#status').slice(1)); })();
+setInterval(async()=>{ await refresh(); testButtons(); },5000);
 setInterval(()=>{ if($('chart').classList.contains('on')) drawChart(); },30000);
 setInterval(refreshWifi,15000);
 </script>

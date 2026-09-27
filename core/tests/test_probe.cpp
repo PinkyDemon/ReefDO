@@ -174,6 +174,15 @@ TEST_CASE("poll flags a bit-identical DO+temperature stream as Stuck, still retu
     uart.chunks.push_back(Reply(6.51f, 98.0f, 26.01f)); // DO moved
     REQUIRE(probe.Poll().status == Status::Ok);
     REQUIRE(probe.IdenticalCount() == 0);
+
+    // A new stuck_minutes (or sample period) takes effect at once, without losing the count so far.
+    uart.chunks.push_back(Reply(6.51f, 98.0f, 26.01f));
+    REQUIRE(probe.Poll().status == Status::Ok);
+    cfg.stuckSamples = 1;
+    probe.SetConfig(cfg);
+    uart.chunks.push_back(Reply(6.51f, 98.0f, 26.01f));
+    REQUIRE(probe.Poll().status == Status::Stuck);
+    REQUIRE(probe.IdenticalCount() == 2);
 }
 
 TEST_CASE("air calibration writes 0x001A=1 and checks the echo", "[probe]")

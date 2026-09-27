@@ -15,7 +15,7 @@ namespace reefdo::log
 enum class Type : uint8_t
 {
     Measurement = 1,
-    Event = 2, // ladder / service events; `aux` carries the event code, `flags` the detail
+    Event = 2, // ladder events; `aux` carries the event code, `flags` the detail (app.hpp)
     Boot = 3,
     Fault = 4,
     Config = 5,
@@ -23,7 +23,7 @@ enum class Type : uint8_t
     Command = 7,
     TimeSync = 8, // f0 = offset applied (s), aux = source
     Daily = 9,    // f0 do_min, f1 do_avg, f2 do_max, f3 temp_avg; aux = minute_of_min | level_max << 16 | events << 24
-    Service = 10, // aux = service event code | device << 8 | outcome << 16; f0 = response
+    Test = 10,    // aux = test event code | device << 8 | outcome << 16 | skip << 24; f0 = response (app.hpp)
     Boost = 11,   // aux = boost event code; f0 = DO mg/L, f1 = target mg/L
 };
 

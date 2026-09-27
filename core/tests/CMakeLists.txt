@@ -21,12 +21,14 @@ add_executable(reefdo_tests
   test_ladder.cpp
   test_ladder_properties.cpp
   test_config.cpp
-  test_service.cpp
+  test_selftest.cpp
   test_boost.cpp
   test_log.cpp
   test_sim.cpp
   test_app.cpp
   test_api.cpp
+  test_tuya.cpp
+  test_slot.cpp
 )
 target_link_libraries(reefdo_tests PRIVATE reefdo_core catch2)
 if(MSVC)

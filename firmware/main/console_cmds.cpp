@@ -18,6 +18,7 @@
 #include "net.hpp"
 #include "notify.hpp"
 #include "sampler.hpp"
+#include "tuya_link.hpp"
 #include "web.hpp"
 
 namespace console
@@ -31,6 +32,11 @@ using reefdo::app::App;
 const char* const LEVEL[] = {"normal", "blue", "yellow", "red"};
 const char* const PHASE[] = {"idle", "deficit", "running", "tail", "settle"};
 const char* const OUTCOME[] = {"-", "pass", "FAIL", "inconclusive", "unchecked"};
+
+constexpr int DEVICE_COUNT = static_cast<int>(reefdo::DEVICES);
+
+// One buffer for every JSON document the console prints (the console runs on one task).
+char sBuf[reefdo::api::JSON_MAX];
 
 bool Is(const char* pA, const char* pB)
 {
@@ -76,7 +82,6 @@ int CmdStatus(int pArgc, char** pArgv)
     const reefdo::app::Clock clock = sampler::ClockNow();
     if(pArgc == 2 && Is(pArgv[1], "json"))
     {
-        static char sBuf[2048];
         const std::size_t n = reefdo::api::StatusJson(app, clock, sBuf);
         std::printf("%.*s\n", static_cast<int>(n), sBuf);
         return 0;
@@ -102,14 +107,26 @@ int CmdStatus(int pArgc, char** pArgv)
     std::printf("level %s (effective %s)%s%s%s%s\n", LEVEL[static_cast<int>(s.level)],
                 LEVEL[static_cast<int>(s.effective)], s.fault ? "  FAULT" : "", s.silenced ? "  silenced" : "",
                 s.heat ? "  heat" : "", s.maintenance ? "  MAINTENANCE" : "");
-    std::printf("devices:");
-    for(std::size_t i = 0; i < reefdo::app::DEVICES; ++i)
+    if(s.maintenance)
+        std::printf("maintenance ends by itself in %lu min\n",
+                    static_cast<unsigned long>((s.maintenanceLeftS + 59) / 60));
+    std::printf("devices (@relay, E = coil energised):");
+    const reefdo::config::Config& cfg = app.GetConfig();
+    for(std::size_t i = 0; i < reefdo::DEVICES; ++i)
     {
-        std::printf(" %u=%s%s%s", static_cast<unsigned>(i + 1), s.deviceOn[i] ? "on" : "off",
-                    s.relayEnergised[i] ? "(E)" : "", s.deviceFailed[i] ? "!FAILED" : "");
+        const reefdo::slot::Relay* relay = cfg.devices[i].slot.AsRelay();
+        char output[16] = "";
+        if(relay != nullptr && relay->channel - 1u < reefdo::RELAYS)
+            std::snprintf(output, sizeof output, "@%lu%s", static_cast<unsigned long>(relay->channel),
+                          s.relayEnergised[relay->channel - 1] ? "E" : "");
+        if(cfg.devices[i].slot.AsTuya() != nullptr) std::strcpy(output, "@plug");
+        std::printf(" %u=%s%s%s", static_cast<unsigned>(i + 1), s.deviceOn[i] ? "on" : "off", output,
+                    s.deviceFailed[i] ? "!FAILED" : "");
+        if(s.suspendLeftS[i] > 0) std::printf("[out of order %lus]", static_cast<unsigned long>(s.suspendLeftS[i]));
+        if(s.manual[i].has_value()) std::printf("[manual %s]", *s.manual[i] ? "on" : "off");
     }
-    std::printf("\nservice: %s device %u%s%s\n", PHASE[static_cast<int>(s.servicePhase)], s.serviceDevice,
-                s.serviceRunning ? "  RUNNING" : "", s.inconclusiveAlert ? "  inconclusive-streak" : "");
+    std::printf("\ntest: %s device %u%s%s\n", PHASE[static_cast<int>(s.testPhase)], s.testDevice,
+                s.testRunning ? "  RUNNING" : "", s.inconclusiveAlert ? "  inconclusive-streak" : "");
     std::printf("boost: %s\n", s.boostRunning ? "RUNNING" : "idle");
     std::printf("log: A %u  B %u  E %u  D %u  next seq %lu  ticks %lu\n", static_cast<unsigned>(app.LogA().Count()),
                 static_cast<unsigned>(app.LogB().Count()), static_cast<unsigned>(app.LogE().Count()),
@@ -145,32 +162,31 @@ int CmdMaint(int pArgc, char** pArgv)
     return 0;
 }
 
-int CmdService(int pArgc, char** pArgv)
+int CmdTest(int pArgc, char** pArgv)
 {
     sampler::Guard guard;
     if(pArgc == 2 && Is(pArgv[1], "run"))
     {
-        sampler::App().RunService();
-        std::printf("service run requested\n");
+        sampler::App().RunTest();
+        std::printf("test run requested\n");
         return 0;
     }
     if(pArgc == 2 && Is(pArgv[1], "json"))
     {
-        static char sBuf[1024];
-        const std::size_t n = reefdo::api::ServiceJson(sampler::App(), sBuf);
+        const std::size_t n = reefdo::api::TestJson(sampler::App(), sBuf);
         std::printf("%.*s\n", static_cast<int>(n), sBuf);
         return 0;
     }
-    const reefdo::service::Persistent& p = sampler::App().ServicePersistent();
+    const reefdo::selftest::Persistent& p = sampler::App().TestPersistent();
     const reefdo::config::Config& cfg = sampler::App().GetConfig();
-    std::printf("window %02u:%02u-%02u:%02u  last run day %ld  inconclusive streak %lu\n",
-                cfg.service.windowStartMin / 60, cfg.service.windowStartMin % 60, cfg.service.windowEndMin / 60,
-                cfg.service.windowEndMin % 60, p.lastRunDay ? static_cast<long>(*p.lastRunDay) : -1L,
+    std::printf("window %02u:%02u-%02u:%02u  last run day %ld  inconclusive streak %lu\n", cfg.test.windowStartMin / 60,
+                cfg.test.windowStartMin % 60, cfg.test.windowEndMin / 60, cfg.test.windowEndMin % 60,
+                p.lastRunDay ? static_cast<long>(*p.lastRunDay) : -1L,
                 static_cast<unsigned long>(p.inconclusiveStreak));
-    for(std::size_t i = 0; i < reefdo::app::DEVICES; ++i)
+    for(std::size_t i = 0; i < reefdo::DEVICES; ++i)
     {
-        std::printf("  %u %-24s service_s %lu  last %s  response %.2f %%%s\n", static_cast<unsigned>(i + 1),
-                    cfg.devices[i].name.c_str(), static_cast<unsigned long>(cfg.devices[i].serviceS),
+        std::printf("  %u %-24s test_s %lu  last %s  response %.2f %%%s\n", static_cast<unsigned>(i + 1),
+                    cfg.devices[i].name.c_str(), static_cast<unsigned long>(cfg.test.devices[i].testS),
                     OUTCOME[static_cast<int>(p.lastOutcome[i])], static_cast<double>(p.lastResponse[i]),
                     p.failActive[i] ? "  FAIL ACTIVE" : "");
     }
@@ -192,51 +208,127 @@ int CmdCal(int pArgc, char** pArgv)
     return r == reefdo::probe::CalResult::Ok ? 0 : 1;
 }
 
-// relay <1..6> on|off|auto — through the App's maintenance override; the ladder's demands still win.
-int CmdRelay(int pArgc, char** pArgv)
+// Parses the device number of "<cmd> <device> ..."; prints the problem and returns -1 when it is not one.
+int DeviceArg(int pArgc, char** pArgv, const char* pUsage)
 {
-    sampler::Guard guard;
-    if(pArgc == 2 && Is(pArgv[1], "auto"))
-    {
-        for(std::size_t i = 0; i < reefdo::app::DEVICES; ++i)
-            sampler::App().SetDeviceOverride(i, std::nullopt);
-        std::printf("all overrides cleared\n");
-        return 0;
-    }
     if(pArgc != 3)
     {
-        std::printf("usage: relay <1..6> on|off|auto   |   relay auto\n");
-        return 1;
+        std::printf("usage: %s\n", pUsage);
+        return -1;
     }
     const int n = std::atoi(pArgv[1]);
-    if(n < 1 || n > board::RELAY_COUNT)
+    if(n < 1 || n > DEVICE_COUNT)
     {
-        std::printf("device must be 1..%d\n", board::RELAY_COUNT);
+        std::printf("device must be 1..%d\n", DEVICE_COUNT);
+        return -1;
+    }
+    return n;
+}
+
+// suspend <device> <minutes>|off — device maintenance: out of order, alerts included. Needs no maintenance mode.
+int CmdSuspend(int pArgc, char** pArgv)
+{
+    const int n = DeviceArg(pArgc, pArgv, "suspend <device> <minutes>|off");
+    if(n < 0) return 1;
+    const bool off = Is(pArgv[2], "off");
+    const int minutes = off ? 0 : std::atoi(pArgv[2]);
+    if(minutes < 0 || minutes > 24 * 60 || (minutes == 0 && !off))
+    {
+        std::printf("expected a number of minutes or off\n");
         return 1;
     }
-    std::optional<bool> on;
-    if(Is(pArgv[2], "on"))
-        on = true;
-    else if(Is(pArgv[2], "off"))
-        on = false;
+    sampler::Guard guard;
+    if(!sampler::App().SuspendDevice(static_cast<std::size_t>(n - 1), static_cast<uint32_t>(minutes) * 60u,
+                                     sampler::ClockNow()))
+    {
+        std::printf("refused: at most %lu min\n", static_cast<unsigned long>(reefdo::app::SUSPEND_MAX_S / 60));
+        return 1;
+    }
+    sampler::ApplyRelays();
+    if(off)
+        std::printf("device %d back in order\n", n);
+    else
+        std::printf("device %d out of order for %d min (off, alerts included)\n", n, minutes);
+    return 0;
+}
+
+// manual <device> on|off|auto — by hand until the device's next scheduled or triggered change.
+int CmdManual(int pArgc, char** pArgv)
+{
+    const int n = DeviceArg(pArgc, pArgv, "manual <device> on|off|auto");
+    if(n < 0) return 1;
+    std::optional<bool> state;
+    if(Is(pArgv[2], "on") || Is(pArgv[2], "off"))
+        state = Is(pArgv[2], "on");
     else if(!Is(pArgv[2], "auto"))
     {
         std::printf("expected on|off|auto\n");
         return 1;
     }
-    if(!sampler::App().SetDeviceOverride(static_cast<std::size_t>(n - 1), on))
+    sampler::Guard guard;
+    if(!sampler::App().SetManual(static_cast<std::size_t>(n - 1), state, sampler::ClockNow()))
     {
-        std::printf("refused: overrides need maintenance mode (maint on)\n");
+        std::printf("refused: an exclusive test is running\n");
         return 1;
     }
     sampler::ApplyRelays();
-    std::printf("device %d override: %s\n", n, pArgv[2]);
+    std::printf("device %d manual %s\n", n, pArgv[2]);
     return 0;
+}
+
+// tuya — the plugs and their links; tuya test <device> on|off — one transaction now, bypassing the App (the plug
+// task puts the App's state back within a minute).
+int CmdTuya(int pArgc, char** pArgv)
+{
+    static const char* const LINK[] = {"relay", "pending", "ok", "LOST"};
+    if(pArgc == 1)
+    {
+        sampler::Guard guard;
+        const reefdo::app::Status& s = sampler::App().GetStatus();
+        const reefdo::config::Config& cfg = sampler::App().GetConfig();
+        for(std::size_t i = 0; i < reefdo::DEVICES; ++i)
+        {
+            const reefdo::slot::Tuya* t = cfg.devices[i].slot.AsTuya();
+            if(t == nullptr) continue;
+            std::printf("  %u %-24s %-15s v3.%c dp %lu  %s%s%s\n", static_cast<unsigned>(i + 1),
+                        cfg.devices[i].name.c_str(), t->ip.c_str(), "345"[static_cast<int>(t->version)],
+                        static_cast<unsigned long>(t->dp), LINK[static_cast<int>(s.tuyaLink[i])],
+                        s.tuyaError[i] == reefdo::tuya::Error::None ? "" : ": ",
+                        s.tuyaError[i] == reefdo::tuya::Error::None ? "" : tuya_link::ErrorName(s.tuyaError[i]));
+        }
+        return 0;
+    }
+    if(pArgc != 4 || !Is(pArgv[1], "test") || (!Is(pArgv[3], "on") && !Is(pArgv[3], "off")))
+    {
+        std::printf("usage: tuya | tuya test <device> on|off\n");
+        return 1;
+    }
+    const int n = std::atoi(pArgv[2]);
+    if(n < 1 || n > DEVICE_COUNT)
+    {
+        std::printf("device must be 1..%d\n", DEVICE_COUNT);
+        return 1;
+    }
+    reefdo::slot::AnySlot slot;
+    {
+        sampler::Guard guard;
+        slot = sampler::App().GetConfig().devices[static_cast<std::size_t>(n - 1)].slot;
+    }
+    const reefdo::slot::Tuya* t = slot.AsTuya();
+    if(t == nullptr)
+    {
+        std::printf("device %d is not a Tuya plug (its slot type is %s)\n", n, reefdo::slot::Name(slot.GetKind()));
+        return 1;
+    }
+    std::printf("switching %s %s ...\n", t->ip.c_str(), pArgv[3]);
+    const reefdo::tuya::Result r = tuya_link::Test(*t, Is(pArgv[3], "on"));
+    std::printf("%s%s\n", tuya_link::ErrorName(r.error),
+                r.state.has_value() ? (*r.state ? "; the plug reports on" : "; the plug reports off") : "");
+    return r.Ok() ? 0 : 1;
 }
 
 int CmdConfig(int pArgc, char** pArgv)
 {
-    static char sBuf[4096];
     if(pArgc == 2 && Is(pArgv[1], "get"))
     {
         const std::size_t n = sampler::ConfigJson(sBuf);
@@ -337,7 +429,7 @@ int CmdDebug(int pArgc, char** pArgv)
         if(pArgc == 5 && Is(pArgv[2], "k"))
         {
             const int dev = std::atoi(pArgv[3]);
-            if(dev < 1 || dev > board::RELAY_COUNT) return 1;
+            if(dev < 1 || dev > DEVICE_COUNT) return 1;
             tank->SetDeviceK(static_cast<std::size_t>(dev - 1), static_cast<float>(std::atof(pArgv[4])));
             std::printf("device %d exchange rate %s /h\n", dev, pArgv[4]);
             return 0;
@@ -433,7 +525,7 @@ int CmdFactory(int pArgc, char** pArgv)
 {
     if(pArgc != 2 || !Is(pArgv[1], "yes"))
     {
-        std::printf("usage: factory yes   (erases config, service history, credentials; logs stay; reboots)\n");
+        std::printf("usage: factory yes   (erases config, test history, credentials; logs stay; reboots)\n");
         return 1;
     }
     hal::nvs::EraseAll();
@@ -521,9 +613,11 @@ void Start()
     Add("status", "status [json]", CmdStatus);
     Add("ack", "silence the alarm for ack_silence_s", CmdAck);
     Add("maint", "maint on|off", CmdMaint);
-    Add("service", "service [run|json]", CmdService);
+    Add("test", "test [run|json]  (the devices' self test)", CmdTest);
     Add("cal", "cal air", CmdCal);
-    Add("relay", "relay <1..6> on|off|auto | relay auto  (maintenance)", CmdRelay);
+    Add("suspend", "suspend <device> <minutes>|off  (device maintenance: off, alerts included)", CmdSuspend);
+    Add("manual", "manual <device> on|off|auto  (until the next scheduled or triggered change)", CmdManual);
+    Add("tuya", "tuya | tuya test <device> on|off  (Tuya plugs)", CmdTuya);
     Add("config", "config get | set <json> | reset", CmdConfig);
     Add("time", "time [unix [tz]]", CmdTime);
     Add("probe", "probe sim|rk500", CmdProbe);

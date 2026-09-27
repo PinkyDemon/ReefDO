@@ -25,6 +25,22 @@ constexpr int32_t TZ = 2 * 3600;
 // 2026-09-14 18:00:00 local (UTC+2) = 16:00 UTC
 constexpr uint32_t START_UNIX = 1789401600u;
 
+inline reefdo::slot::Relay RelayOn(uint32_t pChannel, bool pNc)
+{
+    return {pChannel, pNc ? reefdo::slot::Wiring::Nc : reefdo::slot::Wiring::No};
+}
+
+// A plug slot with a valid key; the id and address say which plug.
+inline reefdo::slot::Tuya Plug(const char* pId, const char* pIp = "192.168.1.50", uint32_t pDp = 1)
+{
+    reefdo::slot::Tuya t;
+    t.id.assign(pId);
+    t.ip.assign(pIp);
+    t.key.assign("0123456789abcdef");
+    t.dp = pDp;
+    return t;
+}
+
 inline reefdo::config::Config ExampleConfig()
 {
     reefdo::config::Config c = reefdo::config::Defaults();
@@ -32,9 +48,9 @@ inline reefdo::config::Config ExampleConfig()
         [&c](std::size_t pI, const char* pName, bool pNc, Trigger pT, Mode pM, bool pAck, uint32_t pSvc, float pResp)
     {
         c.devices[pI].name.assign(pName);
-        c.devices[pI].wiredNc = pNc;
-        c.devices[pI].serviceS = pSvc;
-        c.devices[pI].minResponsePct = pResp;
+        c.devices[pI].slot = RelayOn(static_cast<uint32_t>(pI + 1), pNc);
+        c.test.devices[pI].testS = pSvc;
+        c.test.devices[pI].minResponsePct = pResp;
         c.ladder.devices[pI] = {pT, pM, pAck};
     };
     dev(0, "small bubbler", true, Trigger::Blue, Mode::On, false, 300, 1.0f);
@@ -43,8 +59,8 @@ inline reefdo::config::Config ExampleConfig()
     dev(3, "siren", false, Trigger::Yellow, Mode::On, true, 0, 0.0f);
     dev(4, "return pump", true, Trigger::Blue, Mode::PulseOff, false, 0, 0.0f);
     dev(5, "unused", false, Trigger::None, Mode::On, false, 0, 0.0f);
-    c.service.windowStartMin = 19 * 60 + 30; // the scenarios are written for 19:30–21:00
-    c.service.windowEndMin = 21 * 60;
+    c.test.windowStartMin = 19 * 60 + 30; // the scenarios are written for 19:30–21:00
+    c.test.windowEndMin = 21 * 60;
     return c;
 }
 
@@ -70,8 +86,8 @@ struct Scenario
     Clock clock;
     bool clockKnown = true;
     std::vector<Notification> notes;
-    std::vector<std::array<bool, 6>> relayHistory; // energised per tick (kept short by callers who care)
-    uint32_t pulses = 0;                           // ticks device 4 was unpowered
+    std::vector<std::array<bool, reefdo::RELAYS>> relayHistory; // energised per tick (kept short by callers who care)
+    uint32_t pulses = 0;                                        // ticks device 4 was unpowered
 
     explicit Scenario(reefdo::config::Config pC = ExampleConfig(), reefdo::sim::TankConfig pT = ExampleTank(),
                       reefdo::sim::ProbeModel pM = {})

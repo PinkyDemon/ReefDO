@@ -7,7 +7,17 @@ Facts an agent needs to work in this repository. The README covers usage; this c
 - `core/` is a hardware-independent C++23 library: no ESP-IDF headers, no exceptions, no RTTI, no heap in the
   sampling path, fixed-size containers (`FixedVector`, `FixedString`). Hardware enters through interfaces:
   `probe::IUart`, `probe::IProbe`, `log::IBlockStore`, `api::ISink`. Time is always passed in (`app::Clock`).
-- `core/src/config.cpp` is the only file that includes ArduinoJson.
+- ArduinoJson is used by `core/src/config.cpp` and `core/src/api.cpp` only (the core-internal
+  `core/src/slot_json.hpp` shares the slot writer between them).
+- Device outputs are slots (`core/include/reefdo/slot.hpp`): `slot::Slot` with `Relay` and `Tuya`, held by value in
+  `slot::AnySlot`. Each type lists its parameters as `slot::Field`s and walks them with `Fields(IFields&)`; the
+  config reads, writes and checks them from that list, `config::SlotSchema` turns it into the JSON Schema the page
+  builds its editors from (`GET /api/slots`). A new output type is a new `Slot` subclass and its field list —
+  no config, validation or page code of its own. `Slot ==` is `IsSame` (the same physical output: uniqueness);
+  `AnySlot ==` compares every parameter (configuration equality).
+- The device registry's size is `DEVICES` in `core/include/reefdo/devices.hpp` (8), next to `RELAYS` (6, the
+  board's). Everything else — arrays, the config document, `config::DOC_MAX` / `api::JSON_MAX` and the
+  firmware's buffers — follows from those two.
 - `firmware/main/` is thin glue over ESP-IDF v6.1: `sampler` owns the `app::App` and ticks it on its own task
   under a recursive mutex (`sampler::Guard`); `web`, `console_cmds` and `indicator` reach the App only through
   that guard. Relays are written only from `sampler`.
@@ -24,12 +34,32 @@ Facts an agent needs to work in this repository. The README covers usage; this c
   every push; a `v*` tag publishes a release and must equal `VERSION` in `core/include/reefdo/version.hpp`.
 - Relays must be de-energised before anything else runs at boot (`board::InitRelaysDeenergised` is the first
   call in `app_main`). NC wiring means de-energised = device on.
-- The ladder (`core/src/ladder.cpp`) decides device states, whether the buzzer may sound, and the LED colour;
-  the firmware only renders. Config decides buzzer patterns; LED codes are fixed in `indicator.cpp`.
+- The ladder (`core/src/ladder.cpp`) decides device states and whether the alarm may sound (`Output::sound`);
+  config decides the buzzer patterns; the LED codes are fixed in the firmware (`indicator.cpp`).
+- The self test's settings live in `config.test` (`selftest::Config`, with `test.devices[i]`), like the ladder's
+  (`config.ladder`) and the boost's (`config.boost`); the App steps them straight from `mCfg`.
 - Blue is silent unless configured; Normal is always silent; FAULT acts as `fault.level` (Red by default).
-- Device demand is the OR of the ladder, the service run (`service.cpp`) and the boost (`boost.cpp`);
-  the boost yields to the other two and runs at most once per local day.
+- Device demand is the OR of the ladder, the self test (`selftest.cpp`, called "service" up to 1.0), the
+  boost (`boost.cpp`), the always-on windows and the manual switch (`app::Demand`, reported as
+  `Status::deviceWhy`); the boost yields to a test run and maintenance and runs at most once per local day; an
+  exclusive test (`test.exclusive`) holds the windows off and ends manual switches, and only an exclusive run
+  measures or judges. A manual on/off (`App::SetManual`) overrides the demands until the device's demands or
+  the effective level change, or an exclusive test starts; then it is automatic again.
+- ReefDO maintenance (maintenance mode: controller work, hushes the buzzer, ends by itself after
+  `app::MAINTENANCE_S` = 30 min) and device maintenance (a device out of order, RAM only) are independent. An
+  out-of-order device is off regardless of every demand, alerts included; a test that would exercise it skips or
+  aborts.
 - Writes over HTTP need Basic auth; reads are open. Never log or store the password anywhere but NVS.
+- Tuya plugs: `core/src/tuya.cpp` is the protocol (3.3 / 3.4 / 3.5) behind `tuya::ICrypto` and
+  `tuya::IConnection`; `firmware/main/tuya_link.cpp` implements them with PSA Crypto (ESP-IDF 6 ships
+  mbedTLS 4: the legacy `mbedtls_aes_*` / `mbedtls_gcm_*` calls are gone) and lwIP, and is the only code that
+  switches a plug. Local keys never leave the board: anything a browser or the console sees uses
+  `config::Write(..., true)`; only NVS gets the full document.
+- Each device drives at most one output (`devices.N.slot`), and no two devices share one (`Validate`, by
+  `Slot ==`); NC/NO is a relay's parameter. `Status::relayEnergised` is per channel; a channel no device owns
+  stays de-energised.
+- A self-test miss that started at or above `test.no_fail_above_mgl` (DO at the device's start) is Unchecked,
+  not Fail; the DeviceEnd record carries flag 8, the DO in f1 and the limit in f2.
 - The log rings assume raw NOR flash: a torn record seals its segment, a partial tail is dropped on open,
   segments are erased right before reuse. Tests model this in `core/tests/fake_store.hpp`.
 

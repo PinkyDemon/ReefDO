@@ -7,12 +7,14 @@ set(REEFDO_CORE_SOURCES
   src/probe.cpp
   src/ladder.cpp
   src/config.cpp
-  src/service.cpp
+  src/selftest.cpp
   src/boost.cpp
   src/log.cpp
   src/sim.cpp
   src/app.cpp
   src/api.cpp
+  src/tuya.cpp
+  src/slot.cpp
 )
 
 # ArduinoJson (third_party, MIT) is the one library the core uses — only from config.cpp / api.cpp.

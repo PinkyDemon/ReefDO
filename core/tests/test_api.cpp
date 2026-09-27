@@ -1,3 +1,4 @@
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -36,7 +37,7 @@ struct StringSink : ISink
 
 std::string Status(const Scenario& pS)
 {
-    std::vector<char> buf(4096);
+    std::vector<char> buf(JSON_MAX);
     const std::size_t n = StatusJson(pS.app, pS.clock, buf);
     REQUIRE(n > 0);
     return std::string(buf.data(), n);
@@ -62,17 +63,28 @@ TEST_CASE("status_json describes the device, the ladder thresholds, and every de
     REQUIRE(d["probe"]["status"] == "ok");
     REQUIRE(d["probe"]["do"].as<float>() > 6.0f);
     REQUIRE(d["ladder"]["level"] == "normal");
+    REQUIRE(d["ladder"]["buzzer"] == "off");
+    REQUIRE(d["ladder"]["maintenance_s"] == 0);
+    REQUIRE(d["ladder"]["led"].isNull()); // the LED codes are the firmware's
     REQUIRE(d["ladder"]["enters_below"]["blue"].as<float>() == Catch::Approx(5.65f));
     REQUIRE(d["ladder"]["leaves_above"]["red"].as<float>() == Catch::Approx(4.70f));
     REQUIRE(d["correction"]["factory"] == true);
     REQUIRE(d["correction"]["seawater_scale_hint"].as<float>() > 0.8f);
-    REQUIRE(d["devices"].size() == 6);
+    REQUIRE(d["devices"].size() == reefdo::DEVICES);
+    REQUIRE(d["devices"][0]["slot"]["type"] == "relay");
+    REQUIRE(d["devices"][0]["slot"]["channel"] == 1);
+    REQUIRE(d["devices"][0]["slot"]["wiring"] == "NC");
+    REQUIRE(d["devices"][7]["slot"]["type"] == "none"); // no output
+    REQUIRE(d["devices"][7]["energised"] == false);
+    REQUIRE(d["relays"].size() == reefdo::RELAYS);
+    REQUIRE(d["relays"][2] == true); // the strong air pump: NC, off
+    REQUIRE(d["relays"][4] == false);
     REQUIRE(d["devices"][0]["name"] == "small bubbler");
-    REQUIRE(d["devices"][0]["wired"] == "NC");
+
     REQUIRE(d["devices"][4]["pulse"] == true);
     REQUIRE(d["devices"][4]["on"] == true);
     REQUIRE(d["devices"][4]["energised"] == false);
-    REQUIRE(d["service"]["window_start"] == "19:30");
+    REQUIRE(d["test"]["window_start"] == "19:30");
     REQUIRE(d["boost"]["enabled"] == false);
     REQUIRE(d["boost"]["running"] == false);
     REQUIRE(d["boost"]["window_end"] == "20:00");
@@ -86,6 +98,7 @@ TEST_CASE("status_json describes the device, the ladder thresholds, and every de
     REQUIRE(f["probe"]["status"] == "timeout");
     REQUIRE(f["ladder"]["fault"] == true);
     REQUIRE(f["ladder"]["effective"] == "red");
+    REQUIRE(f["ladder"]["buzzer"] == "triple"); // what plays: the configured FAULT pattern
 
     Scenario nc; // clock unknown: no "unix" key
     nc.clockKnown = false;
@@ -103,26 +116,27 @@ TEST_CASE("status_json describes the device, the ladder thresholds, and every de
     REQUIRE(StatusJson(s.app, s.clock, tiny) == 0);
 }
 
-TEST_CASE("service_json reports outcomes, responses and the run duration", "[api]")
+TEST_CASE("test_json reports outcomes, responses and the run duration", "[api]")
 {
     Scenario s;
     s.Start();
     std::vector<char> buf(2048);
-    REQUIRE(ServiceJson(s.app, buf) > 0);
+    REQUIRE(TestJson(s.app, buf) > 0);
     JsonDocument d = Parse(std::string(buf.data()));
     REQUIRE(d["running"] == false);
     REQUIRE(d["run_duration_s"].as<uint32_t>() == 3 * 300 + 3 * 60 + 2 * 120);
     REQUIRE(d["devices"][0]["last_outcome"] == "none");
+    REQUIRE(d["no_fail_above_mgl"].as<float>() == Catch::Approx(6.1f));
     REQUIRE(d["last_run_day"].isNull());
     s.RunUntil(21, 5);
-    REQUIRE(ServiceJson(s.app, buf) > 0);
+    REQUIRE(TestJson(s.app, buf) > 0);
     d = Parse(std::string(buf.data()));
     REQUIRE(d["devices"][0]["last_outcome"] == "pass");
     REQUIRE(d["devices"][1]["last_outcome"] == "unchecked");
     REQUIRE(d["devices"][0]["last_response"].as<float>() > 1.0f);
     REQUIRE(d["last_run_day"].as<uint32_t>() > 20000);
     char tiny[32];
-    REQUIRE(ServiceJson(s.app, tiny) == 0);
+    REQUIRE(TestJson(s.app, tiny) == 0);
 }
 
 TEST_CASE("apply_config keeps the current values for keys the document omits", "[api]")
@@ -158,30 +172,23 @@ TEST_CASE("apply_command: every command and every refusal", "[api]")
     REQUIRE_FALSE(ApplyCommand(s.app, R"({"ack":false})", s.clock).ok);
 
     REQUIRE(ApplyCommand(s.app, R"({"ack":true})", s.clock).ok);
-    REQUIRE(ApplyCommand(s.app, R"({"service":"run"})", s.clock).ok);
-    REQUIRE_FALSE(ApplyCommand(s.app, R"({"service":"walk"})", s.clock).ok);
+    REQUIRE(ApplyCommand(s.app, R"({"test":"run"})", s.clock).ok);
+    REQUIRE_FALSE(ApplyCommand(s.app, R"({"test":"walk"})", s.clock).ok);
     s.Tick();
-    REQUIRE(s.app.GetStatus().serviceRunning);
+    REQUIRE(s.app.GetStatus().testRunning);
 
     Command c = ApplyCommand(s.app, R"({"cal":"air"})", s.clock);
     REQUIRE_FALSE(c.ok);
     REQUIRE(std::string(c.message) == "maintenance mode required");
     REQUIRE_FALSE(ApplyCommand(s.app, R"({"cal":"zero"})", s.clock).ok);
-    REQUIRE_FALSE(ApplyCommand(s.app, R"({"relay":{"device":2,"on":true}})", s.clock).ok); // not in maintenance
-    REQUIRE_FALSE(ApplyCommand(s.app, R"({"relay":{"device":0,"on":true}})", s.clock).ok);
-    REQUIRE_FALSE(ApplyCommand(s.app, R"({"relay":{"device":"two"}})", s.clock).ok);
+    REQUIRE(std::string(ApplyCommand(s.app, R"({"relay":{"device":2,"on":true}})", s.clock).message) ==
+            "unknown command"); // the old relay test: the manual switch does that now
 
     REQUIRE(ApplyCommand(s.app, R"({"maintenance":true})", s.clock).ok);
     s.Tick();
     REQUIRE(s.app.GetStatus().maintenance);
     REQUIRE(ApplyCommand(s.app, R"({"cal":"air"})", s.clock).ok);
     REQUIRE(s.probe.Calibrations() == 1);
-    REQUIRE(ApplyCommand(s.app, R"({"relay":{"device":2,"on":true}})", s.clock).ok);
-    s.Tick();
-    REQUIRE(s.app.GetStatus().deviceOn[1]);
-    REQUIRE(ApplyCommand(s.app, R"({"relay":{"device":2}})", s.clock).ok); // clears the override
-    s.Tick();
-    REQUIRE_FALSE(s.app.GetStatus().deviceOn[1]);
     REQUIRE(ApplyCommand(s.app, R"({"maintenance":false})", s.clock).ok);
 
     c = ApplyCommand(s.app, R"({"time":{"unix":1789401600,"tz":7200}})", s.clock);
@@ -327,4 +334,155 @@ TEST_CASE("Unreadable flash and odd inputs never break the streams", "[api]")
     REQUIRE(SeriesCsv(s.app, 'B', 0, now, 1, dead_b) == 0);
     REQUIRE(EventsCsv(s.app, 0, dead_e) == 0);
     REQUIRE(ExportCsv(s.app, 0, dead_x) == 0);
+}
+
+TEST_CASE("status_json and test_json report why a device is on, device maintenance, manual and exclusive mode",
+          "[api][device_maintenance]")
+{
+    Scenario s;
+    s.Start();
+    s.RunS(60);
+    REQUIRE(ApplyCommand(s.app, R"({"manual":{"device":6,"on":true}})", s.clock).ok);
+    REQUIRE(ApplyCommand(s.app, R"({"suspend":{"device":1,"s":300}})", s.clock).ok);
+    JsonDocument d = Parse(Status(s));
+    REQUIRE(d["devices"][5]["manual"] == true);
+    REQUIRE(d["devices"][2]["manual"].isNull()); // automatic
+    REQUIRE(d["devices"][5]["why"].size() == 1);
+    REQUIRE(d["devices"][5]["why"][0] == "manual");
+    REQUIRE(d["devices"][0]["suspend_s"] == 300);
+    REQUIRE(d["devices"][0]["why"].size() == 0);
+    REQUIRE(d["devices"][4]["why"][0] == "ladder"); // the return pump is normally powered
+    REQUIRE(d["test"]["exclusive"] == true);
+
+    std::vector<char> buf(2048);
+    REQUIRE(TestJson(s.app, buf) > 0);
+    d = Parse(std::string(buf.data()));
+    REQUIRE(d["exclusive"] == true);
+
+    reefdo::config::Config c = s.app.GetConfig();
+    c.test.exclusive = false;
+    c.test.induceDeficitS = 120;
+    c.test.induceDeficitDevice = 5;
+    REQUIRE(s.app.SetConfig(c, s.clock));
+    REQUIRE(TestJson(s.app, buf) > 0);
+    d = Parse(std::string(buf.data()));
+    REQUIRE(d["exclusive"] == false);
+    REQUIRE(d["run_duration_s"].as<uint32_t>() == 3 * 300 + 3 * 60 + 2 * 120); // no deficit without exclusive
+}
+
+TEST_CASE("apply_command: suspend and manual, and their refusals", "[api][device_maintenance]")
+{
+    Scenario s;
+    s.Start();
+    s.RunS(60);
+    REQUIRE(std::string(ApplyCommand(s.app, R"({"suspend":{"device":9,"s":300}})", s.clock).message) ==
+            "no such device number");
+    REQUIRE(std::string(ApplyCommand(s.app, R"({"suspend":{"device":3}})", s.clock).message) ==
+            "s must be a number of seconds (0 ends it)");
+    Command c = ApplyCommand(s.app, R"({"suspend":{"device":3,"s":9000}})", s.clock);
+    REQUIRE_FALSE(c.ok);
+    REQUIRE(std::string(c.message) == "at most 7200 s");
+    c = ApplyCommand(s.app, R"({"suspend":{"device":5,"s":300}})", s.clock); // no maintenance mode needed
+    REQUIRE(std::string(c.message) == "device suspended");
+    REQUIRE_FALSE(s.app.GetStatus().deviceOn[4]);
+    c = ApplyCommand(s.app, R"({"suspend":{"device":5,"s":0}})", s.clock);
+    REQUIRE(std::string(c.message) == "device resumed");
+    REQUIRE(s.app.GetStatus().deviceOn[4]);
+
+    REQUIRE(std::string(ApplyCommand(s.app, R"({"manual":{"device":0,"on":true}})", s.clock).message) ==
+            "no such device number");
+    REQUIRE(std::string(ApplyCommand(s.app, R"({"manual":{"device":"two","on":true}})", s.clock).message) ==
+            "no such device number");
+    REQUIRE(std::string(ApplyCommand(s.app, R"({"manual":{"device":2,"on":"yes"}})", s.clock).message) ==
+            "on must be true, false or null (automatic)");
+    c = ApplyCommand(s.app, R"({"manual":{"device":2,"on":true}})", s.clock);
+    REQUIRE(std::string(c.message) == "manual on");
+    REQUIRE(s.app.GetStatus().deviceOn[1]);
+    c = ApplyCommand(s.app, R"({"manual":{"device":2,"on":false}})", s.clock);
+    REQUIRE(std::string(c.message) == "manual off");
+    REQUIRE_FALSE(s.app.GetStatus().deviceOn[1]);
+    REQUIRE(s.app.GetStatus().manual[1] == false);
+    c = ApplyCommand(s.app, R"({"manual":{"device":2,"on":null}})", s.clock);
+    REQUIRE(std::string(c.message) == "automatic");
+    REQUIRE_FALSE(s.app.GetStatus().manual[1].has_value());
+    REQUIRE(ApplyCommand(s.app, R"({"test":"run"})", s.clock).ok);
+    s.Tick();
+    c = ApplyCommand(s.app, R"({"manual":{"device":2,"on":true}})", s.clock);
+    REQUIRE_FALSE(c.ok);
+    REQUIRE(std::string(c.message) == "an exclusive test is running");
+}
+
+TEST_CASE("status_json shows a plug's slot with the key masked, its link and last error, and null for a relay",
+          "[api][tuya]")
+{
+    reefdo::config::Config c = ExampleConfig();
+    c.devices[5].slot = Plug("bf0123456789abcdefgh");
+    Scenario s(c);
+    s.Start();
+    s.Tick();
+    JsonDocument d = Parse(Status(s));
+    REQUIRE(d["devices"][0]["link"].isNull());
+    REQUIRE(d["devices"][5]["slot"]["type"] == "tuya");
+    REQUIRE(d["devices"][5]["slot"]["id"] == "bf0123456789abcdefgh");
+    REQUIRE(d["devices"][5]["slot"]["key"] == "********");
+    REQUIRE(d["devices"][5]["energised"] == false);
+    REQUIRE(d["devices"][5]["link"]["state"] == "pending");
+    for(int i = 0; i < 3; ++i)
+        s.app.ReportTuya(5, reefdo::tuya::Error::Auth, s.clock);
+    d = Parse(Status(s));
+    REQUIRE(d["devices"][5]["link"]["state"] == "lost");
+    REQUIRE(d["devices"][5]["link"]["error"] == "auth");
+}
+
+TEST_CASE("The largest status document fits JSON_MAX; a relay number past the channels is never read", "[api]")
+{
+    reefdo::config::Config c = ExampleConfig();
+    for(std::size_t i = 0; i < reefdo::DEVICES; ++i)
+    {
+        c.devices[i].name.assign("an extraordinarily long");
+        c.devices[i].slot = Plug("0123456789012345678901234567890", "192.168.100.200", 255); // slot, link, error
+        c.devices[i].windows.push_back({0, 23 * 60 + 59});
+    }
+    c.devices[7].slot = RelayOn(static_cast<uint32_t>(reefdo::RELAYS + 1), true); // only unvalidated configs do this
+    Scenario s(c);
+    s.Start();
+    s.Tick();
+    for(std::size_t i = 0; i < reefdo::DEVICES; ++i)
+        s.app.SetManual(i, true, s.clock);
+    std::vector<char> buf(JSON_MAX);
+    const std::size_t n = StatusJson(s.app, s.clock, buf);
+    REQUIRE(n > 0);
+    REQUIRE(n + reefdo::DEVICES * 32 < JSON_MAX); // room for the demands not set here (ladder, test, boost)
+    const JsonDocument d = Parse(std::string(buf.data(), n));
+    REQUIRE(d["devices"][7]["slot"]["channel"] == reefdo::RELAYS + 1);
+    REQUIRE(d["devices"][7]["energised"] == false);
+}
+
+TEST_CASE("The slot schema describes every slot type's parameters for the page, and fits JSON_MAX", "[api][slot]")
+{
+    std::vector<char> buf(JSON_MAX);
+    const std::size_t n = reefdo::config::SlotSchema(buf);
+    REQUIRE(n > 0);
+    const JsonDocument d = Parse(std::string(buf.data(), n));
+    REQUIRE(d["none"]["properties"].size() == 0);
+    REQUIRE(d["relay"]["title"] == "relay");
+    const JsonVariantConst channel = d["relay"]["properties"]["channel"];
+    REQUIRE(channel["type"] == "integer");
+    REQUIRE(channel["minimum"] == 1);
+    REQUIRE(channel["maximum"] == reefdo::RELAYS);
+    REQUIRE(channel["default"] == 1);
+    REQUIRE(std::strlen(channel["description"].as<const char*>()) > 20);
+    REQUIRE(d["relay"]["properties"]["wiring"]["enum"][1] == "NC");
+    REQUIRE(d["relay"]["properties"]["wiring"]["default"] == "NO");
+    REQUIRE(d["relay"]["required"].size() == 2);
+    const JsonVariantConst tuya = d["tuya"]["properties"];
+    REQUIRE(tuya["ip"]["format"] == "ipv4");
+    REQUIRE(tuya["key"]["writeOnly"] == true);
+    REQUIRE(tuya["key"]["minLength"] == 16);
+    REQUIRE(tuya["id"]["writeOnly"].isNull());
+    REQUIRE(tuya["version"]["enum"].size() == 3);
+    REQUIRE(tuya["dp"]["maximum"] == 255);
+
+    char tiny[64];
+    REQUIRE(reefdo::config::SlotSchema(tiny) == 0);
 }

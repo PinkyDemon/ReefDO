@@ -25,7 +25,7 @@ CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
 # Windows' built-in usbser driver handles it; no vendor driver needed.
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
-# Custom partition table (nvs, otadata, phy, ota_0, ota_1, coredump, littlefs)
+# Custom partition table (nvs, otadata, phy, coredump, ota_0, ota_1 and the four raw log rings)
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"

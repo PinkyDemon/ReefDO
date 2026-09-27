@@ -48,111 +48,100 @@ std::optional<Level> TriggerLevel(Trigger pT)
 
 TEST_CASE("Ladder invariants hold on random histories", "[ladder][property]")
 {
-    proptest::Forall(300,
-                     [](proptest::Rng& pRng)
-                     {
-                         Config cfg = RandomConfig(pRng);
-                         State st;
-                         float d = pRng.Uniform(4.0f, 7.5f);
-                         uint64_t now = 500'000;
-                         std::array<uint32_t, DEVICES> offRun{}; // consecutive ticks a pulse device has been unpowered
-                         Level prevLevel = Level::Normal;
-                         bool prevFault = false;
+    proptest::Forall(
+        300,
+        [](proptest::Rng& pRng)
+        {
+            Config cfg = RandomConfig(pRng);
+            State st;
+            float d = pRng.Uniform(4.0f, 7.5f);
+            uint64_t now = 500'000;
+            std::array<uint32_t, reefdo::DEVICES> offRun{}; // consecutive ticks a pulse device has been unpowered
+            Level prevLevel = Level::Normal;
+            bool prevFault = false;
 
-                         for(int t = 0; t < 600; ++t)
-                         {
-                             // Random walk with occasional jumps, probe dropouts, presses and clock states.
-                             d += pRng.Uniform(-0.15f, 0.15f);
-                             if(pRng.Coin(0.02)) d = pRng.Uniform(3.5f, 7.5f);
-                             if(d < 3.0f) d = 3.0f;
-                             if(d > 8.0f) d = 8.0f;
+            for(int t = 0; t < 600; ++t)
+            {
+                // Random walk with occasional jumps, probe dropouts, presses and clock states.
+                d += pRng.Uniform(-0.15f, 0.15f);
+                if(pRng.Coin(0.02)) d = pRng.Uniform(3.5f, 7.5f);
+                if(d < 3.0f) d = 3.0f;
+                if(d > 8.0f) d = 8.0f;
 
-                             Input in;
-                             in.nowMs = now;
-                             in.doMgl = pRng.Coin(0.08) ? std::nullopt : std::optional<float>(d);
-                             in.tempC =
-                                 in.doMgl.has_value() ? std::optional<float>(pRng.Uniform(25.0f, 29.0f)) : std::nullopt;
-                             in.slopeMglPer10min = pRng.Uniform(-1.0f, 1.0f);
-                             in.minuteOfDay = pRng.Coin(0.1)
-                                                  ? std::nullopt
-                                                  : std::optional<uint16_t>(static_cast<uint16_t>(pRng.Below(1440)));
-                             in.ackPressed = pRng.Coin(0.05);
-                             in.maintenance = pRng.Coin(0.05);
-                             for(auto& f : in.deviceFailed)
-                                 f = pRng.Coin(0.1);
+                Input in;
+                in.nowMs = now;
+                in.doMgl = pRng.Coin(0.08) ? std::nullopt : std::optional<float>(d);
+                in.tempC = in.doMgl.has_value() ? std::optional<float>(pRng.Uniform(25.0f, 29.0f)) : std::nullopt;
+                in.slopeMglPer10min = pRng.Uniform(-1.0f, 1.0f);
+                in.minuteOfDay =
+                    pRng.Coin(0.1) ? std::nullopt : std::optional<uint16_t>(static_cast<uint16_t>(pRng.Below(1440)));
+                in.ackPressed = pRng.Coin(0.05);
+                in.maintenance = pRng.Coin(0.05);
+                for(auto& f : in.deviceFailed)
+                    f = pRng.Coin(0.1);
 
-                             // Invariant 6 (ack never changes the level): the same tick without the press lands on the
-                             // same level.
-                             State shadow = st;
-                             Input quiet = in;
-                             quiet.ackPressed = false;
-                             const Output quietOut = Step(shadow, quiet, cfg);
+                // Invariant 6 (ack never changes the level): the same tick without the press lands on the
+                // same level.
+                State shadow = st;
+                Input quiet = in;
+                quiet.ackPressed = false;
+                const Output quietOut = Step(shadow, quiet, cfg);
 
-                             const Output o = Step(st, in, cfg);
-                             now += 10'000;
+                const Output o = Step(st, in, cfg);
+                now += 10'000;
 
-                             REQUIRE(o.level == quietOut.level);
-                             REQUIRE(o.effective >= o.level);
+                REQUIRE(o.level == quietOut.level);
+                REQUIRE(o.effective >= o.level);
 
-                             // Invariant 3: deeper is immediate, shallower is exactly one step, and only with a
-                             // reading.
-                             if(o.level < prevLevel)
-                                 REQUIRE(static_cast<int>(prevLevel) - static_cast<int>(o.level) == 1);
-                             if(o.level != prevLevel) REQUIRE(in.doMgl.has_value());
+                // Invariant 3: deeper is immediate, shallower is exactly one step, and only with a
+                // reading.
+                if(o.level < prevLevel) REQUIRE(static_cast<int>(prevLevel) - static_cast<int>(o.level) == 1);
+                if(o.level != prevLevel) REQUIRE(in.doMgl.has_value());
 
-                             // Invariant 1: cumulative activation.
-                             for(std::size_t i = 0; i < DEVICES; ++i)
-                             {
-                                 const DeviceConfig& dc = cfg.devices[i];
-                                 if(dc.mode == Mode::PulseOff)
-                                 {
-                                     offRun[i] = o.deviceOn[i] ? 0 : offRun[i] + 1;
-                                     REQUIRE(offRun[i] <= cfg.pulseS / 10); // invariant 7: restored after pulse_s
-                                     continue;
-                                 }
-                                 const std::optional<Level> tl = TriggerLevel(dc.trigger);
-                                 bool expect = false;
-                                 if(dc.trigger == Trigger::Heat)
-                                 {
-                                     expect = o.heat;
-                                 }
-                                 else if(tl.has_value())
-                                 {
-                                     expect = *tl <= o.effective;
-                                 }
-                                 if(dc.ackSilences)
-                                     expect = expect && o.effective >= Level::Yellow && !o.silenced && !in.maintenance;
-                                 REQUIRE(o.deviceOn[i] == expect);
-                             }
+                // Invariant 1: cumulative activation.
+                for(std::size_t i = 0; i < reefdo::DEVICES; ++i)
+                {
+                    const DeviceConfig& dc = cfg.devices[i];
+                    if(dc.mode == Mode::PulseOff)
+                    {
+                        offRun[i] = o.deviceOn[i] ? 0 : offRun[i] + 1;
+                        REQUIRE(offRun[i] <= cfg.pulseS / 10); // invariant 7: restored after pulse_s
+                        continue;
+                    }
+                    const std::optional<Level> tl = TriggerLevel(dc.trigger);
+                    bool expect = false;
+                    if(dc.trigger == Trigger::Heat)
+                    {
+                        expect = o.heat;
+                    }
+                    else if(tl.has_value())
+                    {
+                        expect = *tl <= o.effective;
+                    }
+                    if(dc.ackSilences)
+                        expect = expect && o.effective >= Level::Yellow && !o.silenced && !in.maintenance;
+                    REQUIRE(o.deviceOn[i] == expect);
+                }
 
-                             // Invariant 4: Blue never gets the loud patterns; Normal is silent.
-                             if(o.effective == Level::Blue) REQUIRE(o.buzzer != Buzzer::Continuous);
-                             if(o.effective == Level::Normal) REQUIRE(o.buzzer == Buzzer::Off);
+                // Invariant 4: the alarm may sound exactly when an alert or FAULT shows, unsilenced, not in
+                // maintenance.
+                REQUIRE(o.sound == (o.effective != Level::Normal && !o.silenced && !in.maintenance));
 
-                             // Invariant 5: FAULT is loud and acts as at least Yellow.
-                             if(o.fault)
-                             {
-                                 REQUIRE(o.effective >= Level::Yellow);
-                                 if(!o.silenced && !in.maintenance) REQUIRE(o.buzzer == Buzzer::FaultTriple);
-                                 if(!prevFault) REQUIRE_FALSE(in.doMgl.has_value());
-                             }
-                             if(!o.fault && prevFault) REQUIRE(in.doMgl.has_value());
+                // Invariant 5: FAULT is loud and acts as at least Yellow.
+                if(o.fault)
+                {
+                    REQUIRE(o.effective >= Level::Yellow);
+                    if(!prevFault) REQUIRE_FALSE(in.doMgl.has_value());
+                }
+                if(!o.fault && prevFault) REQUIRE(in.doMgl.has_value());
 
-                             // Invariant 10: maintenance never makes noise.
-                             if(in.maintenance)
-                             {
-                                 REQUIRE(o.buzzer == Buzzer::Off);
-                                 REQUIRE(o.led == Led::Cyan);
-                             }
-                             if(o.silenced) REQUIRE(o.buzzer == Buzzer::Off);
+                // Events are bounded and the vector never overflowed.
+                REQUIRE(o.events.size() <= o.events.Capacity());
 
-                             // Events are bounded and the vector never overflowed.
-                             REQUIRE(o.events.size() <= o.events.Capacity());
-
-                             prevLevel = o.level;
-                             prevFault = o.fault;
-                         }
-                     });
+                prevLevel = o.level;
+                prevFault = o.fault;
+            }
+        });
 }
 
 TEST_CASE("Hysteresis: no level change while the reading stays inside every band", "[ladder][property]")

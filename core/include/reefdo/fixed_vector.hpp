@@ -1,5 +1,6 @@
 #pragma once
 // Fixed-capacity vector: the only "container" the core uses. No heap, no exceptions.
+#include <algorithm>
 #include <array>
 #include <cstddef>
 
@@ -25,6 +26,7 @@ public:
     T& operator[](std::size_t pI) { return mData[pI]; }
     const T* begin() const { return mData.data(); }
     const T* end() const { return mData.data() + mSize; }
+    bool operator==(const FixedVector& pO) const { return std::equal(begin(), end(), pO.begin(), pO.end()); }
 
 private:
     std::array<T, N> mData{};

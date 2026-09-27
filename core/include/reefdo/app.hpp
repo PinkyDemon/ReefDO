@@ -1,5 +1,5 @@
 #pragma once
-// The orchestrator: one Tick() per sample period runs probe → correction → filters → ladder → service → log.
+// The orchestrator: one Tick() per sample period: probe → correction → filters → ladder → self test → log.
 // No hardware here: the probe is an IProbe, storage IBlockStores, time a Clock snapshot.
 #include <array>
 #include <cstdint>
@@ -12,12 +12,33 @@
 #include "reefdo/ladder.hpp"
 #include "reefdo/log.hpp"
 #include "reefdo/probe.hpp"
-#include "reefdo/service.hpp"
+#include "reefdo/selftest.hpp"
 
 namespace reefdo::app
 {
 
-constexpr std::size_t DEVICES = ladder::DEVICES;
+constexpr uint32_t SUSPEND_MAX_S = 2 * 3600; // device maintenance: out of order at most this long per command
+constexpr uint32_t MAINTENANCE_S = 30 * 60;  // ReefDO maintenance mode ends by itself this long after it is entered
+constexpr uint32_t TUYA_LOST_AFTER = 3;      // failed transactions in a row before a plug counts as lost
+
+// A Tuya plug's link, as its task last reported it (Status::tuyaLink).
+enum class Link : uint8_t
+{
+    None,    // a relay, not a plug
+    Pending, // configured, not reached yet
+    Ok,
+    Lost // TUYA_LOST_AFTER failures in a row: logged and pushed
+};
+
+// Why a device is on (Status::deviceWhy). Any bit keeps it on; only a suspension turns it off regardless.
+enum Demand : uint8_t
+{
+    DEMAND_LADDER = 1, // its level (or heat), or a pulse device's normal power
+    DEMAND_TEST = 2,
+    DEMAND_BOOST = 4,
+    DEMAND_WINDOW = 8,
+    DEMAND_MANUAL = 16, // switched on by hand (App::SetManual; the page's device test too)
+};
 
 struct Clock
 {
@@ -40,9 +61,11 @@ enum class NotifyKind : uint8_t
     Fault,
     FaultCleared,
     Recovered,
-    ServiceFail,
-    ServiceInconclusive,
-    Boot
+    TestFail,
+    TestInconclusive,
+    Boot,
+    DeviceLost, // a Tuya plug stopped answering
+    DeviceBack
 };
 
 struct Notification
@@ -54,6 +77,8 @@ struct Notification
     bool urgent = false;
     bool repeat = false; // a re-send of a standing alarm
 };
+// Collected between two TakeNotifications(): room for every plug going lost at once, plus the level and test ones.
+using Notifications = FixedVector<Notification, DEVICES + 8>;
 
 // Bits in Measurement records' `flags`
 enum MeasurementFlag : uint16_t
@@ -61,12 +86,19 @@ enum MeasurementFlag : uint16_t
     FLAG_STUCK = 1,
     FLAG_MAINTENANCE = 2,
     FLAG_SILENCED = 4,
-    FLAG_SERVICE_RUNNING = 8,
+    FLAG_TEST_RUNNING = 8,
     FLAG_HEAT = 16,
     FLAG_CLOCK_UNKNOWN = 32,
+    FLAG_SUSPENDED = 64, // a device is out of order (device maintenance)
 };
 
-// Service records: aux = event type | device << 8 | outcome << 16 | skip << 24
+// Command records: aux = 1 maintenance on, 2 maintenance off (f1 = 0 command, 1 time ran out), 3 air calibration
+//   (f0 = result),
+//   4 out of order (| device << 8, f0 = seconds), 5 back in order (| device << 8, f1 = 0 command, 1 time ran out),
+//   6 manual on / 7 manual off / 8 back to automatic (| device << 8; 8: f1 = 0 command, 1 a schedule or trigger
+//   took over, 2 an exclusive test started), 9 plug lost (| device << 8, f0 = tuya::Error), 10 plug back
+// Test records: aux = event type | device << 8 | outcome << 16 | skip << 24, flags = judged 1 | clock unknown 2
+//   | aborted 4 | high DO 8 (a missed response let off: f1 = DO at the device's start, f2 = the limit)
 // Ladder event records: aux = ladder::EventType, flags = from | to << 8, aux device in bits 8..15 for Pulse
 
 struct Status
@@ -83,15 +115,20 @@ struct Status
     bool silenced = false;
     bool heat = false;
     bool maintenance = false;
-    std::array<bool, DEVICES> deviceOn{};       // semantic "powered"
-    std::array<bool, DEVICES> relayEnergised{}; // after NO/NC polarity — what the coils get
-    ladder::Buzzer buzzer = ladder::Buzzer::Off;
-    ladder::Led led = ladder::Led::Green;
-    bool chirp = false; // this tick only
-    bool serviceRunning = false;
-    service::Phase servicePhase = service::Phase::Idle;
+    uint32_t maintenanceLeftS = 0;                     // until maintenance mode ends by itself
+    std::array<bool, DEVICES> deviceOn{};              // semantic "powered"
+    std::array<bool, RELAYS> relayEnergised{};         // per relay channel, after NO/NC polarity; unassigned = off
+    std::array<uint8_t, DEVICES> deviceWhy{};          // Demand bits (a suspended device keeps them, but is off)
+    std::array<uint32_t, DEVICES> suspendLeftS{};      // > 0: out of order (device maintenance), seconds left
+    std::array<std::optional<bool>, DEVICES> manual{}; // switched on / off by hand; nullopt = automatic
+    std::array<Link, DEVICES> tuyaLink{};
+    std::array<tuya::Error, DEVICES> tuyaError{}; // the last transaction's
+    bool sound = false;                           // the ladder lets the alarm sound (config signals shape it)
+    bool chirp = false;                           // this tick only
+    bool testRunning = false;
+    selftest::Phase testPhase = selftest::Phase::Idle;
     bool boostRunning = false;
-    uint8_t serviceDevice = 0;
+    uint8_t testDevice = 0;
     std::array<bool, DEVICES> deviceFailed{};
     bool inconclusiveAlert = false;
     uint32_t nextSeq = 1;
@@ -111,26 +148,36 @@ public:
 
     // Commands (from the console, the web UI, the button)
     void Ack();
+    // ReefDO maintenance mode, for MAINTENANCE_S; entering it again restarts the countdown.
     void SetMaintenance(bool pOn, const Clock& pClock);
-    void RunService();
+    void RunTest();
     bool SetConfig(const config::Config& pCfg, const Clock& pClock);
-    // Maintenance-only: force a device on/off for the relay test; the ladder's demands still win. nullopt clears.
-    bool SetDeviceOverride(std::size_t pDevice, std::optional<bool> pOn);
+
+    // Device maintenance, independent of ReefDO maintenance: out of order for 1..SUSPEND_MAX_S seconds — off
+    // whatever wants it on, alerts included. 0 puts it back in order.
+    bool SuspendDevice(std::size_t pDevice, uint32_t pSeconds, const Clock& pClock);
+    // Manual switch: on or off by hand, nullopt = back to automatic. It holds until the next scheduled or triggered
+    // change — the device's demands change (a window opens or closes, the test reaches it...), the effective level
+    // changes, or an exclusive test starts — and is refused while an exclusive test runs. Device maintenance still
+    // wins.
+    bool SetManual(std::size_t pDevice, std::optional<bool> pState, const Clock& pClock);
     probe::CalResult AirCalibrate(const Clock& pClock); // maintenance only
+    // The Tuya task's result for one transaction with a plug. False if that slot is not a plug.
+    bool ReportTuya(std::size_t pDevice, tuya::Error pError, const Clock& pClock);
 
     const Status& GetStatus() const { return mStatus; }
     const config::Config& GetConfig() const { return mCfg; }
-    FixedVector<Notification, 8> TakeNotifications();
+    Notifications TakeNotifications();
 
     const log::RecordLog& LogA() const { return mLogA; }
     const log::AggregateLog& LogB() const { return mLogB; }
     const log::RecordLog& LogE() const { return mLogE; }
     const log::RecordLog& LogD() const { return mLogD; }
 
-    const service::State& ServiceState() const { return mService; }
-    const service::Persistent& ServicePersistent() const { return mService.p; }
-    void RestoreService(const service::Persistent& p_) { mService.p = p_; }
-    bool ServicePersistentChanged(); // true once after a change; the firmware then saves to NVS
+    const selftest::State& TestState() const { return mTest; }
+    const selftest::Persistent& TestPersistent() const { return mTest.p; }
+    void RestoreTest(const selftest::Persistent& p_) { mTest.p = p_; }
+    bool TestPersistentChanged(); // true once after a change; the firmware then saves to NVS
 
 private:
     struct Daily
@@ -142,19 +189,27 @@ private:
         uint32_t events = 0;
     };
 
-    std::optional<service::LocalTime> Local(const Clock& pClock) const;
-    void ApplyConfig();
+    std::optional<selftest::LocalTime> Local(const Clock& pClock) const;
+    // Plugs whose settings changed (all of them without pOld) start over as Pending.
+    void ResetLinks(const std::array<slot::AnySlot, DEVICES>* pOld);
     void Write(log::Record& pR, bool pAlsoEvents);
     void LogSimple(const Clock& pClock, log::Type pType, uint32_t pAux, float pF0, float pF1);
     void LogLadderEvents(const Clock& pClock, const ladder::Output& pOut, float pDoNow);
-    void LogServiceEvents(const Clock& pClock, const service::Output& pOut);
+    void LogTestEvents(const Clock& pClock, const selftest::Output& pOut);
     void LogBoostEvents(const Clock& pClock, const boost::Output& pOut);
     void Notify(Notification pN);
     void Aggregate(const Clock& pClock, const probe::Reading& pR, float pDoC, ladder::Level pEff);
-    void DailyRollover(const Clock& pClock, const std::optional<service::LocalTime>& pLt);
+    void DailyRollover(const Clock& pClock, const std::optional<selftest::LocalTime>& pLt);
     void TimeSync(const Clock& pClock);
     void AlertRepeat(const Clock& pClock);
     uint32_t UptimeS(const Clock& pClock) const;
+    void Resolve(std::size_t pI, const Clock& pClock); // demands + manual + test - suspension → deviceOn, relays
+    void UpdateRelays();                               // every channel from its device (unassigned: de-energised)
+    void Expire(std::size_t pI, const Clock& pClock);  // puts a device back in order when its time is up
+    void EndSuspension(std::size_t pI, const Clock& pClock, uint32_t pWhy);
+    void EndMaintenance(const Clock& pClock, uint32_t pWhy); // pWhy: 0 command, 1 time ran out
+    void EndManual(std::size_t pI, const Clock& pClock, uint32_t pWhy);
+    bool AnySuspended() const;
 
     config::Config mCfg;
     probe::IProbe& mProbe;
@@ -163,12 +218,10 @@ private:
     log::RecordLog mLogE;
     log::RecordLog mLogD;
 
-    ladder::Config mLadderCfg;
     ladder::State mLadder;
-    service::Config mServiceCfg;
-    service::State mService;
+    selftest::State mTest;
     boost::State mBoost;
-    service::Persistent mServiceSaved;
+    selftest::Persistent mTestSaved;
 
     filter::Median5 mMedDo;
     filter::Median5 mMedSat;
@@ -179,11 +232,15 @@ private:
     std::optional<uint32_t> mDailyDay;
 
     Status mStatus;
-    FixedVector<Notification, 8> mNotifications;
-    std::array<std::optional<bool>, DEVICES> mOverride{};
-    std::array<bool, DEVICES> mAutoOn{}; // the merged demand before any override, for instant override changes
+    Notifications mNotifications;
+
+    std::array<uint8_t, DEVICES> mAutoWhy{}; // ladder / test / boost / window, as of the last tick
+    std::array<std::optional<uint64_t>, DEVICES> mSuspendUntilMs{};
+    std::optional<uint64_t> mMaintenanceUntilMs;
+    std::array<std::optional<bool>, DEVICES> mManual{};
+    std::array<uint32_t, DEVICES> mTuyaFails{};
     bool mAckPending = false;
-    bool mRunServicePending = false;
+    bool mRunTestPending = false;
     bool mStarted = false;
     uint64_t mBootMs = 0;
     uint32_t mNextSeq = 1;

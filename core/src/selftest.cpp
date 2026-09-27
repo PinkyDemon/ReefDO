@@ -1,8 +1,8 @@
-#include "reefdo/service.hpp"
+#include "reefdo/selftest.hpp"
 
 #include <cmath>
 
-namespace reefdo::service
+namespace reefdo::selftest
 {
 
 namespace
@@ -14,26 +14,37 @@ constexpr uint64_t Ms(uint32_t pS)
 }
 constexpr uint64_t DAY_MS = 24ull * 3600u * 1000u;
 
-std::size_t NextServiced(const Config& pCfg, std::size_t pFrom)
+std::size_t NextTested(const Config& pCfg, std::size_t pFrom)
 {
     for(std::size_t i = pFrom; i < DEVICES; ++i)
     {
-        if(pCfg.devices[i].serviceS > 0) return i;
+        if(pCfg.devices[i].testS > 0) return i;
     }
     return DEVICES;
 }
 
-uint32_t ServicedCount(const Config& pCfg)
+uint32_t TestedCount(const Config& pCfg)
 {
     uint32_t n = 0;
     for(const DeviceConfig& d : pCfg.devices)
-        n += static_cast<uint32_t>(d.serviceS > 0);
+        n += static_cast<uint32_t>(d.testS > 0);
     return n;
 }
 
 bool DeficitConfigured(const Config& pCfg)
 {
-    return pCfg.induceDeficitS > 0 && pCfg.induceDeficitDevice >= 1 && pCfg.induceDeficitDevice <= DEVICES;
+    return pCfg.exclusive && pCfg.induceDeficitS > 0 && pCfg.induceDeficitDevice >= 1 &&
+           pCfg.induceDeficitDevice <= DEVICES;
+}
+
+// A device this run exercises is out of order: it cannot respond, so the run must not judge it.
+bool TestedOut(const Input& pIn, const Config& pCfg)
+{
+    for(std::size_t i = 0; i < DEVICES; ++i)
+    {
+        if(pCfg.devices[i].testS > 0 && pIn.deviceOut[i]) return true;
+    }
+    return false;
 }
 
 bool HasHeadroom(std::optional<float> pSat, const Config& pCfg)
@@ -75,7 +86,7 @@ bool ScheduledDue(State& pS, const Input& pIn, const Config& pCfg, Output& pOut)
     const uint32_t needMin = (RunDurationS(pCfg) + 59) / 60;
     const uint32_t spanMin = static_cast<uint32_t>(pCfg.windowEndMin - pCfg.windowStartMin);
     const uint32_t latest = pCfg.windowEndMin - (needMin < spanMin ? needMin : spanMin);
-    if(m < latest && !HasHeadroom(pIn.satPct, pCfg)) return false;
+    if(m < latest && pCfg.exclusive && !HasHeadroom(pIn.satPct, pCfg)) return false;
     pS.clockUnknown = false;
     return true;
 }
@@ -87,11 +98,12 @@ void BeginDevice(State& pS, const Input& pIn, const Config& pCfg, std::size_t pI
     pS.phaseStartedMs = pIn.nowMs;
     pS.deviceStartedMs = pIn.nowMs;
     pS.sat0 = pIn.satPct.value_or(0.0f);
+    pS.do0 = pIn.doMgl.value_or(0.0f);
     pS.slope0 = pS.slope.SlopePer10min();
     pS.peak = 0.0f;
     if(pFirst)
     {
-        pS.judged = HasHeadroom(pIn.satPct, pCfg);
+        pS.judged = pCfg.exclusive && HasHeadroom(pIn.satPct, pCfg);
         Event e{EventType::RunStart};
         e.judged = pS.judged;
         e.clockUnknown = pS.clockUnknown;
@@ -116,15 +128,19 @@ void EndDevice(State& pS, const Config& pCfg, Output& pOut)
 {
     const std::size_t i = pS.device;
     Outcome o = Outcome::Inconclusive;
+    bool highDo = false;
     if(!pS.aborted)
     {
-        if(pCfg.devices[i].minResponsePct <= 0.0f)
+        if(!pCfg.exclusive || pCfg.devices[i].minResponsePct <= 0.0f)
         {
             o = Outcome::Unchecked;
         }
         else if(pS.deviceJudged)
         {
             o = pS.peak >= pCfg.devices[i].minResponsePct ? Outcome::Pass : Outcome::Fail;
+            // Near saturation a working device has little room to show itself: a miss up there is no verdict.
+            highDo = o == Outcome::Fail && pCfg.noFailAboveMgl > 0.0f && pS.do0 >= pCfg.noFailAboveMgl;
+            if(highDo) o = Outcome::Unchecked;
         }
     }
     pS.p.lastOutcome[i] = o;
@@ -148,12 +164,14 @@ void EndDevice(State& pS, const Config& pCfg, Output& pOut)
     e.device = static_cast<uint8_t>(i);
     e.outcome = o;
     e.response = pS.peak;
+    e.highDo = highDo;
+    e.doMgl = pS.do0;
     Emit(pOut, e);
 }
 
 void EndRun(State& pS, const Config& pCfg, Output& pOut)
 {
-    if(!pS.manual && !pS.aborted)
+    if(!pS.manual && !pS.aborted && pCfg.exclusive)
     {
         if(pS.judged)
         {
@@ -193,12 +211,12 @@ void StartRun(State& pS, const Input& pIn, const Config& pCfg, bool pManual, Out
         pS.phaseStartedMs = pIn.nowMs;
         return;
     }
-    BeginDevice(pS, pIn, pCfg, NextServiced(pCfg, 0), true, pOut);
+    BeginDevice(pS, pIn, pCfg, NextTested(pCfg, 0), true, pOut);
 }
 
 void Advance(State& pS, const Input& pIn, const Config& pCfg, Output& pOut)
 {
-    if(pIn.fault || pIn.level != ladder::Level::Normal)
+    if(pIn.fault || pIn.level != ladder::Level::Normal || TestedOut(pIn, pCfg))
     {
         pS.aborted = true;
         if(pS.phase == Phase::Running || pS.phase == Phase::Tail) EndDevice(pS, pCfg, pOut);
@@ -211,7 +229,7 @@ void Advance(State& pS, const Input& pIn, const Config& pCfg, Output& pOut)
         case Phase::Deficit:
             if(elapsed >= Ms(pCfg.induceDeficitS))
             {
-                BeginDevice(pS, pIn, pCfg, NextServiced(pCfg, 0), true, pOut);
+                BeginDevice(pS, pIn, pCfg, NextTested(pCfg, 0), true, pOut);
                 pOut.deviceOn[pS.device] = true;
             }
             else
@@ -221,7 +239,7 @@ void Advance(State& pS, const Input& pIn, const Config& pCfg, Output& pOut)
             break;
         case Phase::Running:
             Measure(pS, pIn);
-            if(elapsed >= Ms(pCfg.devices[pS.device].serviceS))
+            if(elapsed >= Ms(pCfg.devices[pS.device].testS))
             {
                 pS.phase = Phase::Tail;
                 pS.phaseStartedMs = pIn.nowMs;
@@ -236,7 +254,7 @@ void Advance(State& pS, const Input& pIn, const Config& pCfg, Output& pOut)
             if(elapsed >= Ms(pCfg.tailS))
             {
                 EndDevice(pS, pCfg, pOut);
-                const std::size_t next = NextServiced(pCfg, pS.device + 1);
+                const std::size_t next = NextTested(pCfg, pS.device + 1);
                 if(next == DEVICES)
                 {
                     EndRun(pS, pCfg, pOut);
@@ -259,14 +277,29 @@ void Advance(State& pS, const Input& pIn, const Config& pCfg, Output& pOut)
     }
 }
 
+// Checks switched off: nothing can clear an old verdict any more, so it must not keep escalating the ladder.
+void ForgetChecks(State& pS, Output& pOut)
+{
+    for(std::size_t i = 0; i < DEVICES; ++i)
+    {
+        if(!pS.p.failActive[i]) continue;
+        pS.p.failActive[i] = false;
+        Event e{EventType::FailCleared};
+        e.device = static_cast<uint8_t>(i);
+        Emit(pOut, e);
+    }
+    pS.p.inconclusiveStreak = 0;
+    pS.p.inconclusiveAlert = false;
+}
+
 } // namespace
 
 uint32_t RunDurationS(const Config& pCfg)
 {
-    const uint32_t n = ServicedCount(pCfg);
+    const uint32_t n = TestedCount(pCfg);
     uint32_t total = 0;
     for(const DeviceConfig& d : pCfg.devices)
-        total += d.serviceS;
+        total += d.testS;
     total += n * pCfg.tailS + (n - static_cast<uint32_t>(n > 0)) * pCfg.settleS;
     total += DeficitConfigured(pCfg) ? pCfg.induceDeficitS : 0;
     return total;
@@ -276,6 +309,7 @@ Output Step(State& pS, const Input& pIn, const Config& pCfg)
 {
     Output out;
     if(pIn.satPct.has_value()) pS.slope.Push(pIn.nowMs, *pIn.satPct);
+    if(!pCfg.exclusive) ForgetChecks(pS, out);
 
     if(pS.phase == Phase::Idle)
     {
@@ -283,7 +317,7 @@ Output Step(State& pS, const Input& pIn, const Config& pCfg)
         if(manual || ScheduledDue(pS, pIn, pCfg, out))
         {
             std::optional<Skip> skip;
-            if(ServicedCount(pCfg) == 0)
+            if(TestedCount(pCfg) == 0)
             {
                 skip = Skip::NothingToRun;
             }
@@ -298,6 +332,10 @@ Output Step(State& pS, const Input& pIn, const Config& pCfg)
             else if(pIn.maintenance)
             {
                 skip = Skip::Maintenance;
+            }
+            else if(TestedOut(pIn, pCfg))
+            {
+                skip = Skip::DeviceOut;
             }
             if(skip.has_value())
             {
@@ -325,4 +363,4 @@ Output Step(State& pS, const Input& pIn, const Config& pCfg)
     return out;
 }
 
-} // namespace reefdo::service
+} // namespace reefdo::selftest

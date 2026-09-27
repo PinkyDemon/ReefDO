@@ -89,6 +89,7 @@ public:
     PollResult Poll() override;
     CalResult AirCalibrate() override;
     CalResult ZeroCalibrate();
+    void SetConfig(const Config& pCfg) { mCfg = pCfg; } // a config change: the stuck count carries on
 
     uint32_t IdenticalCount() const { return mIdentical; }
 

@@ -258,50 +258,12 @@ Output Step(State& pS, const Input& pIn, const Config& pCfg)
 
     UpdateDevices(pS, pIn, pCfg, eff, silenced, out);
 
-    Buzzer bz = Buzzer::Off;
-    if(pS.fault)
-    {
-        bz = Buzzer::FaultTriple;
-    }
-    else if(eff == Level::Red)
-    {
-        bz = Buzzer::Continuous;
-    }
-    else if(eff == Level::Yellow || eff == Level::Blue)
-    {
-        bz = Buzzer::Beep; // Blue sounds only if its configured pattern is not "off"
-    }
-    if(silenced || pIn.maintenance) bz = Buzzer::Off;
-
-    Led led = Led::Green;
-    if(pIn.maintenance)
-    {
-        led = Led::Cyan;
-    }
-    else if(pS.fault)
-    {
-        led = Led::Purple;
-    }
-    else if(eff == Level::Red)
-    {
-        led = Led::Red;
-    }
-    else if(eff == Level::Yellow)
-    {
-        led = Led::Yellow;
-    }
-    else if(eff == Level::Blue)
-    {
-        led = Led::Blue;
-    }
-
     out.level = pS.level;
     out.effective = eff;
     out.fault = pS.fault;
     out.silenced = silenced;
     out.heat = pS.heat;
-    out.buzzer = bz;
-    out.led = led;
+    out.sound = eff != Level::Normal && !silenced && !pIn.maintenance; // FAULT acts as Yellow or deeper
     return out;
 }
 

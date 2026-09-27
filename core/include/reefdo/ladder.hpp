@@ -1,11 +1,13 @@
 #pragma once
-// The escalation ladder: Blue / Yellow / Red with hysteresis and dwell, six generic devices.
-// A pure function of (state, input, config): every relay, buzzer and LED decision comes out of Step().
+// The escalation ladder: Blue / Yellow / Red with hysteresis and dwell, generic devices.
+// A pure function of (state, input, config): every device decision, and whether the alarm may sound, comes out of
+// Step(). How it sounds is config (signals); the LED codes are the firmware's (indicator.cpp).
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 
+#include "reefdo/devices.hpp"
 #include "reefdo/fixed_vector.hpp"
 
 namespace reefdo::ladder
@@ -31,24 +33,6 @@ enum class Mode : uint8_t
     On,
     PulseOff
 };
-enum class Buzzer : uint8_t
-{
-    Off,
-    Beep,
-    Continuous,
-    FaultTriple
-};
-enum class Led : uint8_t
-{
-    Green,
-    Blue,
-    Yellow,
-    Red,
-    Purple,
-    Cyan
-};
-
-constexpr std::size_t DEVICES = 6;
 
 struct DeviceConfig
 {
@@ -85,7 +69,7 @@ struct Config
     uint16_t nightStartMin = 21 * 60; // minutes after local midnight
     uint16_t nightEndMin = 8 * 60;
     bool unknownTimeIsNight = true;
-    bool escalateIfFailed = true; // a device that failed its service check makes its level act one deeper
+    bool escalateIfFailed = true; // a device that failed its test makes its level act one deeper
     std::array<DeviceConfig, DEVICES> devices{};
 
     const LevelConfig& GetLevel(Level pL) const; // Blue, Yellow or Red only
@@ -101,7 +85,7 @@ struct Input
     std::optional<uint16_t> minuteOfDay; // local time; nullopt until the clock is known
     bool ackPressed = false;
     bool maintenance = false;
-    std::array<bool, DEVICES> deviceFailed{}; // last service check of that device was `fail`
+    std::array<bool, DEVICES> deviceFailed{}; // last test of that device was `fail`
 };
 
 enum class EventType : uint8_t
@@ -131,10 +115,9 @@ struct Output
     bool fault = false;
     bool silenced = false; // Ack in effect
     bool heat = false;
-    std::array<bool, DEVICES> deviceOn{}; // semantic "powered"; NO/NC polarity is applied by the caller
-    Buzzer buzzer = Buzzer::Off;
-    Led led = Led::Green;
-    FixedVector<Event, 12> events;
+    std::array<bool, DEVICES> deviceOn{};   // semantic "powered"; NO/NC polarity is applied by the caller
+    bool sound = false;                     // the alarm may sound: an alert or FAULT, not silenced, not in maintenance
+    FixedVector<Event, DEVICES + 8> events; // a pulse per device at most, plus the level events
 };
 
 struct PulseState
@@ -159,7 +142,7 @@ struct State
     std::array<PulseState, DEVICES> pulse{};
 };
 
-// Local-time helper, exposed for tests and the service scheduler.
+// Local-time helper, exposed for tests and the test scheduler.
 bool IsNight(std::optional<uint16_t> pMinuteOfDay, const Config& pCfg);
 
 Output Step(State& pS, const Input& pIn, const Config& pCfg);

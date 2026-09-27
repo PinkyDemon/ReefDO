@@ -6,6 +6,8 @@
 
 #include <ArduinoJson.h>
 
+#include "slot_json.hpp"
+
 namespace reefdo::config
 {
 
@@ -16,34 +18,13 @@ using ladder::Trigger;
 namespace
 {
 
-// Enum <-> name tables. Reading searches by name; writing indexes by enum value (contiguous from 0).
-template <class E>
-struct Named
-{
-    const char* name;
-    E value;
-};
-constexpr Named<Trigger> TRIGGERS[] = {{"none", Trigger::None},
-                                       {"blue", Trigger::Blue},
-                                       {"yellow", Trigger::Yellow},
-                                       {"red", Trigger::Red},
-                                       {"heat", Trigger::Heat}};
-constexpr Named<Mode> MODES[] = {{"on", Mode::On}, {"pulse_off", Mode::PulseOff}};
-constexpr Named<Level> LEVELS[] = {{"normal", Level::Normal},
-                                   {"blue", Level::Blue},
-                                   {"yellow", Level::Yellow},
-                                   {"red", Level::Red}};
-constexpr Named<bool> WIRED[] = {{"NO", false}, {"NC", true}};
-
+// Enum names, indexed by the enum's value (contiguous from 0): reading searches them, writing indexes them.
 constexpr const char* TRIGGER_NAMES[] = {"none", "blue", "yellow", "red", "heat"};
 constexpr const char* MODE_NAMES[] = {"on", "pulse_off"};
 constexpr const char* LEVEL_NAMES[] = {"normal", "blue", "yellow", "red"};
-constexpr const char* WIRED_NAMES[] = {"NO", "NC"};
-constexpr const char* LEVEL_KEYS[] = {"blue", "yellow", "red"};
-constexpr Named<BuzzerPattern> BUZZERS[] = {
-    {"off", BuzzerPattern::Off},       {"chirp", BuzzerPattern::Chirp},   {"beep", BuzzerPattern::Beep},
-    {"double", BuzzerPattern::Double}, {"triple", BuzzerPattern::Triple}, {"continuous", BuzzerPattern::Continuous}};
+constexpr const char* WIRED_NAMES[] = {"NO", "NC"}; // a 1.0 document's device-level wiring
 constexpr const char* BUZZER_NAMES[] = {"off", "chirp", "beep", "double", "triple", "continuous"};
+constexpr const char* LEVEL_KEYS[] = {"blue", "yellow", "red"};
 constexpr const char* SIGNAL_KEYS[] = {"normal", "blue", "yellow", "red", "fault"};
 
 Signal* SignalSlots(SignalsConfig& pS, std::size_t pI)
@@ -169,8 +150,37 @@ public:
         pOut = *m;
     }
 
-    template <class E, std::size_t N>
-    void Enumeration(JsonObjectConst pO, const char* pKey, const char* pPath, E& pOut, const Named<E> (&pTable)[N])
+    void Windows(JsonVariantConst pV, const char* pPath, FixedVector<TimeWindow, WINDOWS>& pOut)
+    {
+        if(pV.isNull()) return;
+        if(!pV.is<JsonArrayConst>())
+        {
+            Fail(LoadError::WrongType, pPath, "expected [[\"HH:MM\", \"HH:MM\"], ...]");
+            return;
+        }
+        FixedVector<TimeWindow, WINDOWS> out;
+        for(const JsonVariantConst w : pV.as<JsonArrayConst>())
+        {
+            if(!w.is<JsonArrayConst>() || w.size() != 2 || !w[0].is<const char*>() || !w[1].is<const char*>())
+            {
+                Fail(LoadError::WrongType, pPath, "each window is [\"HH:MM\", \"HH:MM\"]");
+                return;
+            }
+            TimeWindow tw;
+            Hhmm(w[0], pPath, tw.startMin);
+            Hhmm(w[1], pPath, tw.endMin);
+            if(!out.push_back(tw))
+            {
+                Fail(LoadError::BadValue, pPath, "at most 4 windows");
+                return;
+            }
+        }
+        pOut = out;
+    }
+
+    // One of pNames; the value is its index.
+    void Choice(JsonObjectConst pO, const char* pKey, const char* pPath, uint8_t& pOut,
+                std::span<const char* const> pNames)
     {
         const JsonVariantConst v = pO[pKey];
         if(v.isNull()) return;
@@ -179,16 +189,24 @@ public:
             Fail(LoadError::WrongType, pPath, "expected a name");
             return;
         }
-        const char* s = v.as<const char*>();
-        for(const Named<E>& n : pTable)
+        for(std::size_t i = 0; i < pNames.size(); ++i)
         {
-            if(std::strcmp(n.name, s) == 0)
+            if(std::strcmp(pNames[i], v.as<const char*>()) == 0)
             {
-                pOut = n.value;
+                pOut = static_cast<uint8_t>(i);
                 return;
             }
         }
         Fail(LoadError::BadValue, pPath, "unknown name");
+    }
+
+    template <class E>
+    void Enumeration(JsonObjectConst pO, const char* pKey, const char* pPath, E& pOut,
+                     std::span<const char* const> pNames)
+    {
+        uint8_t v = static_cast<uint8_t>(pOut);
+        Choice(pO, pKey, pPath, v, pNames);
+        pOut = static_cast<E>(v);
     }
 
 private:
@@ -211,6 +229,182 @@ LoadResult Invalid(const char* pPath, const char* pMsg)
     return r;
 }
 
+// A slot's parameters out of its JSON object, as its Fields describe them.
+class SlotReader final : public slot::IFields
+{
+public:
+    SlotReader(Reader& pR, JsonObjectConst pO, const char* pPrefix)
+        : mR(pR)
+        , mO(pO)
+        , mPrefix(pPrefix)
+    {
+    }
+    void Number(const slot::Field& pF, uint32_t& pV) override { mR.Number(mO, pF.key, mPath.of(mPrefix, pF.key), pV); }
+    void String(const slot::Field& pF, slot::Text& pV) override
+    {
+        const JsonVariantConst v = mO[pF.key];
+        const bool placeholder =
+            pF.secret && v.is<const char*>() && std::strcmp(v.as<const char*>(), KEY_REDACTED) == 0;
+        if(!placeholder) mR.Text(mO, pF.key, mPath.of(mPrefix, pF.key), pV); // the placeholder keeps the stored one
+    }
+    void Choice(const slot::Field& pF, uint8_t& pV) override
+    {
+        mR.Choice(mO, pF.key, mPath.of(mPrefix, pF.key), pV, pF.choices);
+    }
+
+private:
+    Reader& mR;
+    JsonObjectConst mO;
+    const char* mPrefix;
+    Path mPath;
+};
+
+// devices.N.slot: {"type": ..., parameters}. Another type starts from that type's defaults; the same type keeps the
+// stored parameters the document leaves out.
+void ReadSlot(Reader& pR, JsonVariantConst pV, const char* pPrefix, slot::AnySlot& pOut)
+{
+    if(pV.isNull()) return;
+    if(!pV.is<JsonObjectConst>())
+    {
+        pR.Fail(LoadError::WrongType, pPrefix, "expected {\"type\": ..., parameters}");
+        return;
+    }
+    const JsonObjectConst o = pV.as<JsonObjectConst>();
+    const JsonVariantConst type = o["type"];
+    if(!type.isNull())
+    {
+        const std::optional<slot::Kind> k =
+            type.is<const char*>() ? slot::KindNamed(type.as<const char*>()) : std::nullopt;
+        if(!k.has_value())
+        {
+            Path p;
+            pR.Fail(LoadError::BadValue, p.of(pPrefix, "type"), "not a slot type (GET /api/slots lists them)");
+            return;
+        }
+        if(*k != pOut.GetKind()) pOut.Reset(*k);
+    }
+    slot::Slot* s = pOut.Get();
+    if(s == nullptr) return;
+    SlotReader reader(pR, o, pPrefix);
+    s->Fields(reader);
+}
+
+// The first parameter outside its Field's limits, as an Invalid LoadResult.
+class SlotChecker final : public slot::IFields
+{
+public:
+    explicit SlotChecker(const char* pPrefix)
+        : mPrefix(pPrefix)
+    {
+    }
+    void Number(const slot::Field& pF, uint32_t& pV) override
+    {
+        if(pV < pF.min || pV > pF.max) Fail(pF, "must be %lu..%lu", pF.min, pF.max);
+    }
+    void String(const slot::Field& pF, slot::Text& pV) override
+    {
+        if(pV.size() < pF.min || pV.size() > pF.max)
+        {
+            Fail(pF, pF.min == pF.max ? "must be %lu characters" : "must be %lu..%lu characters", pF.min, pF.max);
+        }
+        else if(pF.ipv4 && !tuya::ValidIpv4(pV.view()))
+        {
+            Fail(pF, "must be an address like 192.168.1.50", 0, 0);
+        }
+    }
+    void Choice(const slot::Field& pF, uint8_t& pV) override
+    {
+        if(pV >= pF.choices.size()) Fail(pF, "unknown value", 0, 0);
+    }
+    const LoadResult& Result() const { return mResult; }
+
+private:
+    void Fail(const slot::Field& pF, const char* pFormat, uint32_t pA, uint32_t pB)
+    {
+        if(!mResult.Ok()) return;
+        char msg[48];
+        std::snprintf(msg, sizeof msg, pFormat, static_cast<unsigned long>(pA), static_cast<unsigned long>(pB));
+        mResult = Invalid(mPath.of(mPrefix, pF.key), msg);
+    }
+
+    const char* mPrefix;
+    Path mPath;
+    LoadResult mResult;
+};
+
+// A slot's parameters into its JSON object.
+class SlotWriter final : public slot::IFields
+{
+public:
+    SlotWriter(JsonObject pO, bool pRedact)
+        : mO(pO)
+        , mRedact(pRedact)
+    {
+    }
+    void Number(const slot::Field& pF, uint32_t& pV) override { mO[pF.key] = pV; }
+    void String(const slot::Field& pF, slot::Text& pV) override
+    {
+        mO[pF.key] = pF.secret && mRedact && !pV.empty() ? std::string_view(KEY_REDACTED) : pV.view();
+    }
+    void Choice(const slot::Field& pF, uint8_t& pV) override
+    {
+        mO[pF.key] = pV < pF.choices.size() ? pF.choices[pV] : "?"; // "?" only for a config Validate() refuses
+    }
+
+private:
+    JsonObject mO;
+    bool mRedact;
+};
+
+// A slot type's parameters as JSON Schema properties; the walked slot's values are the defaults.
+class SchemaWriter final : public slot::IFields
+{
+public:
+    SchemaWriter(JsonObject pProperties, JsonArray pRequired)
+        : mProperties(pProperties)
+        , mRequired(pRequired)
+    {
+    }
+    void Number(const slot::Field& pF, uint32_t& pV) override
+    {
+        JsonObject o = Property(pF, "integer");
+        o["minimum"] = pF.min;
+        o["maximum"] = pF.max;
+        o["default"] = pV;
+    }
+    void String(const slot::Field& pF, slot::Text& pV) override
+    {
+        JsonObject o = Property(pF, "string");
+        o["minLength"] = pF.min;
+        o["maxLength"] = pF.max;
+        if(pF.ipv4) o["format"] = "ipv4";
+        if(pF.secret) o["writeOnly"] = true;
+        o["default"] = pV.view();
+    }
+    void Choice(const slot::Field& pF, uint8_t& pV) override
+    {
+        JsonObject o = Property(pF, "string");
+        JsonArray names = o["enum"].to<JsonArray>();
+        for(const char* const n : pF.choices)
+            names.add(n);
+        o["default"] = pF.choices[pV];
+    }
+
+private:
+    JsonObject Property(const slot::Field& pF, const char* pType)
+    {
+        JsonObject o = mProperties[pF.key].to<JsonObject>();
+        o["type"] = pType;
+        o["title"] = pF.title;
+        o["description"] = pF.help;
+        mRequired.add(pF.key);
+        return o;
+    }
+
+    JsonObject mProperties;
+    JsonArray mRequired;
+};
+
 void WriteLevel(JsonObject pO, const ladder::LevelConfig& pLc)
 {
     pO["mgl"] = pLc.mgl;
@@ -219,6 +413,55 @@ void WriteLevel(JsonObject pO, const ladder::LevelConfig& pLc)
 }
 
 } // namespace
+
+bool TimeWindow::Contains(uint16_t pMinute) const
+{
+    if(startMin <= endMin) return pMinute >= startMin && pMinute < endMin;
+    return pMinute >= startMin || pMinute < endMin; // wraps midnight
+}
+
+void PutSlot(JsonObject pO, const slot::AnySlot& pS, bool pRedact)
+{
+    pO["type"] = slot::Name(pS.GetKind());
+    slot::AnySlot copy = pS; // Fields() walks mutable parameters
+    slot::Slot* s = copy.Get();
+    if(s == nullptr) return;
+    SlotWriter writer(pO, pRedact);
+    s->Fields(writer);
+}
+
+std::size_t SlotSchema(std::span<char> pOut)
+{
+    JsonDocument doc;
+    for(uint8_t k = 0; k < slot::KINDS; ++k)
+    {
+        slot::AnySlot defaults;
+        defaults.Reset(static_cast<slot::Kind>(k));
+        JsonObject t = doc[slot::Name(defaults.GetKind())].to<JsonObject>();
+        t["title"] = slot::Title(defaults.GetKind());
+        t["type"] = "object";
+        SchemaWriter writer(t["properties"].to<JsonObject>(), t["required"].to<JsonArray>());
+        slot::Slot* s = defaults.Get();
+        if(s != nullptr) s->Fields(writer);
+    }
+    if(measureJson(doc) + 1 > pOut.size()) return 0;
+    return serializeJson(doc, pOut.data(), pOut.size());
+}
+
+const char* Name(ladder::Level pL)
+{
+    return LEVEL_NAMES[static_cast<uint8_t>(pL)];
+}
+
+const char* Name(ladder::Trigger pT)
+{
+    return TRIGGER_NAMES[static_cast<uint8_t>(pT)];
+}
+
+const char* Name(BuzzerPattern pP)
+{
+    return BUZZER_NAMES[static_cast<uint8_t>(pP)];
+}
 
 const Signal& SignalsConfig::of(ladder::Level pEffective, bool pIsFault) const
 {
@@ -237,6 +480,7 @@ Config Defaults()
         char name[16];
         std::snprintf(name, sizeof name, "device %u", static_cast<unsigned>(i + 1));
         c.devices[i].name.assign(name);
+        if(i < RELAYS) c.devices[i].slot = slot::Relay(static_cast<uint32_t>(i + 1), slot::Wiring::No);
     }
     return c;
 }
@@ -320,7 +564,7 @@ LoadResult Load(std::string_view pJson, Config& pOut, const Config& pBase)
     const JsonObjectConst fault = r.Object(root, "fault", "fault");
     r.Number(fault, "consecutive_failures", "fault.consecutive_failures", cfg.ladder.faultConsecutiveFailures);
     r.Number(fault, "stuck_minutes", "fault.stuck_minutes", cfg.stuckMinutes);
-    r.Enumeration(fault, "level", "fault.level", cfg.ladder.faultLevel, LEVELS);
+    r.Enumeration(fault, "level", "fault.level", cfg.ladder.faultLevel, LEVEL_NAMES);
     r.Flag(fault, "alert", "fault.alert", cfg.ladder.faultAlert);
 
     const JsonObjectConst correction = r.Object(root, "correction", "correction");
@@ -330,41 +574,54 @@ LoadResult Load(std::string_view pJson, Config& pOut, const Config& pBase)
     const JsonObjectConst devices = r.Object(root, "devices", "devices");
     for(std::size_t i = 0; i < DEVICES; ++i)
     {
-        const char key[2] = {static_cast<char>('1' + i), '\0'};
-        char prefix[16];
+        char key[12];
+        std::snprintf(key, sizeof key, "%u", static_cast<unsigned>(i + 1));
+        char prefix[24];
         std::snprintf(prefix, sizeof prefix, "devices.%s", key);
         const JsonObjectConst d = r.Object(devices, key, prefix);
         r.Text(d, "name", p.of(prefix, "name"), cfg.devices[i].name);
-        r.Enumeration(d, "wired", p.of(prefix, "wired"), cfg.devices[i].wiredNc, WIRED);
-        r.Enumeration(d, "trigger", p.of(prefix, "trigger"), cfg.ladder.devices[i].trigger, TRIGGERS);
-        r.Enumeration(d, "mode", p.of(prefix, "mode"), cfg.ladder.devices[i].mode, MODES);
+        char sprefix[32];
+        std::snprintf(sprefix, sizeof sprefix, "%s.slot", prefix);
+        ReadSlot(r, d["slot"], sprefix, cfg.devices[i].slot);
+        // A 1.0 document has no slot but "wired" at the device: that is the wiring of the device's relay.
+        bool nc = false;
+        r.Enumeration(d, "wired", p.of(prefix, "wired"), nc, WIRED_NAMES);
+        slot::Relay* relay = cfg.devices[i].slot.AsRelay();
+        if(!d["wired"].isNull() && relay != nullptr) relay->wiring = nc ? slot::Wiring::Nc : slot::Wiring::No;
+        r.Enumeration(d, "trigger", p.of(prefix, "trigger"), cfg.ladder.devices[i].trigger, TRIGGER_NAMES);
+        r.Enumeration(d, "mode", p.of(prefix, "mode"), cfg.ladder.devices[i].mode, MODE_NAMES);
         r.Flag(d, "ack_silences", p.of(prefix, "ack_silences"), cfg.ladder.devices[i].ackSilences);
-        r.Number(d, "service_s", p.of(prefix, "service_s"), cfg.devices[i].serviceS);
-        r.Number(d, "min_response_pct", p.of(prefix, "min_response_pct"), cfg.devices[i].minResponsePct);
+        r.Number(d, d["test_s"].isNull() ? "service_s" : "test_s", p.of(prefix, "test_s"), cfg.test.devices[i].testS);
+        r.Number(d, "min_response_pct", p.of(prefix, "min_response_pct"), cfg.test.devices[i].minResponsePct);
         r.Flag(d, "boost", p.of(prefix, "boost"), cfg.boost.devices[i]);
+        r.Windows(d["windows"], p.of(prefix, "windows"), cfg.devices[i].windows);
     }
 
-    const JsonObjectConst service = r.Object(root, "service", "service");
-    const JsonVariantConst window = service["window"];
+    // The self test was called "service" up to 1.0: a stored document of that age still loads.
+    const char* const testKey = root["test"].isNull() ? "service" : "test";
+    const JsonObjectConst test = r.Object(root, testKey, testKey);
+    const JsonVariantConst window = test["window"];
     if(!window.isNull())
     {
         if(!window.is<JsonArrayConst>() || window.as<JsonArrayConst>().size() != 2)
         {
-            r.Fail(LoadError::WrongType, "service.window", "expected [\"HH:MM\", \"HH:MM\"]");
+            r.Fail(LoadError::WrongType, "test.window", "expected [\"HH:MM\", \"HH:MM\"]");
         }
         else
         {
-            r.Hhmm(window[0], "service.window[0]", cfg.service.windowStartMin);
-            r.Hhmm(window[1], "service.window[1]", cfg.service.windowEndMin);
+            r.Hhmm(window[0], "test.window[0]", cfg.test.windowStartMin);
+            r.Hhmm(window[1], "test.window[1]", cfg.test.windowEndMin);
         }
     }
-    r.Number(service, "settle_s", "service.settle_s", cfg.service.settleS);
-    r.Number(service, "tail_s", "service.tail_s", cfg.service.tailS);
-    r.Number(service, "min_headroom_pct", "service.min_headroom_pct", cfg.service.minHeadroomPct);
-    r.Number(service, "inconclusive_days", "service.inconclusive_days", cfg.service.inconclusiveDays);
-    r.Flag(service, "chirp", "service.chirp", cfg.service.chirp);
-    r.Number(service, "induce_deficit_s", "service.induce_deficit_s", cfg.service.induceDeficitS);
-    r.Number(service, "induce_deficit_device", "service.induce_deficit_device", cfg.service.induceDeficitDevice);
+    r.Number(test, "settle_s", "test.settle_s", cfg.test.settleS);
+    r.Number(test, "tail_s", "test.tail_s", cfg.test.tailS);
+    r.Number(test, "min_headroom_pct", "test.min_headroom_pct", cfg.test.minHeadroomPct);
+    r.Number(test, "inconclusive_days", "test.inconclusive_days", cfg.test.inconclusiveDays);
+    r.Flag(test, "chirp", "test.chirp", cfg.test.chirp);
+    r.Number(test, "induce_deficit_s", "test.induce_deficit_s", cfg.test.induceDeficitS);
+    r.Number(test, "induce_deficit_device", "test.induce_deficit_device", cfg.test.induceDeficitDevice);
+    r.Flag(test, "exclusive", "test.exclusive", cfg.test.exclusive);
+    r.Number(test, "no_fail_above_mgl", "test.no_fail_above_mgl", cfg.test.noFailAboveMgl);
 
     const JsonObjectConst boost = r.Object(root, "boost", "boost");
     r.Flag(boost, "enabled", "boost.enabled", cfg.boost.enabled);
@@ -392,14 +649,14 @@ LoadResult Load(std::string_view pJson, Config& pOut, const Config& pBase)
         std::snprintf(prefix, sizeof prefix, "signals.%s", SIGNAL_KEYS[i]);
         const JsonObjectConst o = r.Object(signals, SIGNAL_KEYS[i], prefix);
         Signal& sg = *SignalSlots(cfg.signals, i);
-        r.Enumeration(o, "buzzer", p.of(prefix, "buzzer"), sg.buzzer, BUZZERS);
+        r.Enumeration(o, "buzzer", p.of(prefix, "buzzer"), sg.buzzer, BUZZER_NAMES);
         r.Number(o, "volume", p.of(prefix, "volume"), sg.volume);
     }
 
     const JsonObjectConst ntfy = r.Object(root, "ntfy", "ntfy");
     r.Flag(ntfy, "enabled", "ntfy.enabled", cfg.ntfy.enabled);
     r.Text(ntfy, "topic", "ntfy.topic", cfg.ntfy.topic);
-    r.Enumeration(ntfy, "min_level", "ntfy.min_level", cfg.ntfy.minLevel, LEVELS);
+    r.Enumeration(ntfy, "min_level", "ntfy.min_level", cfg.ntfy.minLevel, LEVEL_NAMES);
 
     if(!res.Ok()) return res;
     const LoadResult v = Validate(cfg);
@@ -438,39 +695,73 @@ LoadResult Validate(const Config& pCfg)
         return Invalid("correction.offset", "must be -2..2");
     if(pCfg.salinityPsu < 0.0f || pCfg.salinityPsu > 50.0f) return Invalid("salinity_psu", "must be 0..50");
 
-    uint32_t serviced = 0;
-    uint32_t serviceTotalS = 0;
+    uint32_t tested = 0;
+    uint32_t testTotalS = 0;
+    char msg[48];
     for(std::size_t i = 0; i < DEVICES; ++i)
     {
-        char prefix[16];
+        const DeviceSettings& dv = pCfg.devices[i];
+        const selftest::DeviceConfig& td = pCfg.test.devices[i];
+        char prefix[24];
         std::snprintf(prefix, sizeof prefix, "devices.%u", static_cast<unsigned>(i + 1));
-        if(l.devices[i].mode == Mode::PulseOff && !pCfg.devices[i].wiredNc)
-            return Invalid(p.of(prefix, "wired"),
-                           "pulse_off requires NC wiring, or a dead controller cuts this device");
-        if(pCfg.devices[i].minResponsePct < 0.0f || pCfg.devices[i].minResponsePct > 50.0f)
+        char sprefix[32];
+        std::snprintf(sprefix, sizeof sprefix, "%s.slot", prefix);
+        slot::AnySlot own = dv.slot; // Fields() walks mutable parameters
+        if(slot::Slot* s = own.Get())
+        {
+            SlotChecker checker(sprefix);
+            s->Fields(checker);
+            if(!checker.Result().Ok()) return checker.Result();
+            for(std::size_t j = 0; j < i; ++j)
+            {
+                const slot::Slot* other = pCfg.devices[j].slot.Get();
+                if(other == nullptr || !(*s == *other)) continue; // Slot == is IsSame: the same output
+                std::snprintf(msg, sizeof msg, "already drives device %u", static_cast<unsigned>(j + 1));
+                return Invalid(sprefix, msg);
+            }
+        }
+        const slot::Relay* relay = dv.slot.AsRelay();
+        if(l.devices[i].mode == Mode::PulseOff && !(relay != nullptr && relay->wiring == slot::Wiring::Nc))
+            return Invalid(p.of(prefix, "mode"), "pulse_off needs a relay wired NC, or a dead controller cuts it");
+        if(td.minResponsePct < 0.0f || td.minResponsePct > 50.0f)
             return Invalid(p.of(prefix, "min_response_pct"), "must be 0..50");
-        if(pCfg.devices[i].serviceS > 3600) return Invalid(p.of(prefix, "service_s"), "must be <= 3600");
-        serviced += static_cast<uint32_t>(pCfg.devices[i].serviceS > 0);
-        serviceTotalS += pCfg.devices[i].serviceS;
+        if(td.testS > 3600) return Invalid(p.of(prefix, "test_s"), "must be <= 3600");
+        for(const TimeWindow& w : dv.windows)
+        {
+            if(w.startMin == w.endMin) return Invalid(p.of(prefix, "windows"), "a window's start and end must differ");
+        }
+        if(!dv.windows.empty() && (l.devices[i].mode == Mode::PulseOff || l.devices[i].ackSilences))
+            return Invalid(p.of(prefix, "windows"), "not for pulse or alarm devices");
+        const bool used =
+            l.devices[i].trigger != Trigger::None || td.testS > 0 || pCfg.boost.devices[i] || !dv.windows.empty();
+        if(used && dv.slot.GetKind() == slot::Kind::None)
+            return Invalid(sprefix, "needs a relay or a plug: it has a trigger, test, boost or window");
+        tested += static_cast<uint32_t>(td.testS > 0);
+        testTotalS += td.testS;
     }
 
-    const ServiceConfig& s = pCfg.service;
-    if(s.windowStartMin >= s.windowEndMin) return Invalid("service.window", "start must be before end");
+    const selftest::Config& s = pCfg.test;
+    if(s.windowStartMin >= s.windowEndMin) return Invalid("test.window", "start must be before end");
     // The window must end before the night lock starts; a night that does not wrap midnight must not overlap it at all.
     const bool wraps = l.nightStartMin > l.nightEndMin;
     const bool beforeNight = s.windowEndMin <= l.nightStartMin;
     const bool afterNight = s.windowStartMin >= l.nightEndMin;
     if(wraps ? !beforeNight : !(beforeNight || afterNight))
-        return Invalid("service.window", "must end before the night lock starts");
-    if(s.minHeadroomPct < 0.0f || s.minHeadroomPct > 20.0f) return Invalid("service.min_headroom_pct", "must be 0..20");
-    if(s.inconclusiveDays < 1) return Invalid("service.inconclusive_days", "must be >= 1");
-    if(s.induceDeficitS > 600) return Invalid("service.induce_deficit_s", "must be <= 600");
+        return Invalid("test.window", "must end before the night lock starts");
+    if(s.minHeadroomPct < 0.0f || s.minHeadroomPct > 20.0f) return Invalid("test.min_headroom_pct", "must be 0..20");
+    if(s.inconclusiveDays < 1) return Invalid("test.inconclusive_days", "must be >= 1");
+    if(s.induceDeficitS > 600) return Invalid("test.induce_deficit_s", "must be <= 600");
     if(s.induceDeficitS > 0 && (s.induceDeficitDevice < 1 || s.induceDeficitDevice > DEVICES))
-        return Invalid("service.induce_deficit_device", "must be 1..6 when induce_deficit_s is set");
-    const uint32_t gaps = serviced - static_cast<uint32_t>(serviced > 0);
-    const uint32_t needed = serviceTotalS + gaps * s.settleS + serviced * s.tailS + s.induceDeficitS;
+        return Invalid("test.induce_deficit_device", "must be a device number when induce_deficit_s is set");
+    if(s.induceDeficitS > 0 && pCfg.devices[s.induceDeficitDevice - 1].slot.GetKind() == slot::Kind::None)
+        return Invalid("test.induce_deficit_device", "that device has no relay or plug to cut");
+    if(s.noFailAboveMgl < 0.0f || s.noFailAboveMgl > 15.0f)
+        return Invalid("test.no_fail_above_mgl", "must be 0..15 (0 = off)");
+    const uint32_t gaps = tested - static_cast<uint32_t>(tested > 0);
+    const uint32_t deficitS = s.exclusive ? s.induceDeficitS : 0; // the deficit only exists to be measured
+    const uint32_t needed = testTotalS + gaps * s.settleS + tested * s.tailS + deficitS;
     if(needed > static_cast<uint32_t>(s.windowEndMin - s.windowStartMin) * 60u)
-        return Invalid("service", "the devices' service runs do not fit in the window");
+        return Invalid("test", "the devices' test runs do not fit in the window");
 
     const SignalsConfig& sg = pCfg.signals;
     if(pCfg.boost.windowStartMin >= pCfg.boost.windowEndMin) return Invalid("boost.window", "start must be before end");
@@ -492,7 +783,7 @@ LoadResult Validate(const Config& pCfg)
     return {};
 }
 
-std::size_t Write(const Config& pCfg, std::span<char> pOut)
+std::size_t Write(const Config& pCfg, std::span<char> pOut, bool pRedact)
 {
     const ladder::Config& l = pCfg.ladder;
     JsonDocument doc;
@@ -527,7 +818,7 @@ std::size_t Write(const Config& pCfg, std::span<char> pOut)
     JsonObject fault = doc["fault"].to<JsonObject>();
     fault["consecutive_failures"] = l.faultConsecutiveFailures;
     fault["stuck_minutes"] = pCfg.stuckMinutes;
-    fault["level"] = LEVEL_NAMES[static_cast<uint8_t>(l.faultLevel)];
+    fault["level"] = Name(l.faultLevel);
     fault["alert"] = l.faultAlert;
 
     doc["ack_silence_s"] = l.ackSilenceS;
@@ -536,31 +827,43 @@ std::size_t Write(const Config& pCfg, std::span<char> pOut)
     JsonObject devices = doc["devices"].to<JsonObject>();
     for(std::size_t i = 0; i < DEVICES; ++i)
     {
-        const char key[2] = {static_cast<char>('1' + i), '\0'};
-        JsonObject d = devices[std::string_view(key, 1)].to<JsonObject>();
+        char key[12];
+        const int keyLen = std::snprintf(key, sizeof key, "%u", static_cast<unsigned>(i + 1));
+        JsonObject d = devices[std::string_view(key, static_cast<std::size_t>(keyLen))].to<JsonObject>();
         d["name"] = pCfg.devices[i].name.view();
-        d["wired"] = WIRED_NAMES[static_cast<std::size_t>(pCfg.devices[i].wiredNc)];
-        d["trigger"] = TRIGGER_NAMES[static_cast<uint8_t>(l.devices[i].trigger)];
+        PutSlot(d["slot"].to<JsonObject>(), pCfg.devices[i].slot, pRedact);
+        d["trigger"] = Name(l.devices[i].trigger);
         d["mode"] = MODE_NAMES[static_cast<uint8_t>(l.devices[i].mode)];
         d["ack_silences"] = l.devices[i].ackSilences;
-        d["service_s"] = pCfg.devices[i].serviceS;
-        d["min_response_pct"] = pCfg.devices[i].minResponsePct;
+        d["test_s"] = pCfg.test.devices[i].testS;
+        d["min_response_pct"] = pCfg.test.devices[i].minResponsePct;
         d["boost"] = pCfg.boost.devices[i];
+        JsonArray windows = d["windows"].to<JsonArray>();
+        for(const TimeWindow& w : pCfg.devices[i].windows)
+        {
+            JsonArray pair = windows.add<JsonArray>();
+            FormatHhmm(w.startMin, hhmm);
+            pair.add(std::string_view(hhmm));
+            FormatHhmm(w.endMin, hhmm);
+            pair.add(std::string_view(hhmm));
+        }
     }
 
-    JsonObject service = doc["service"].to<JsonObject>();
-    JsonArray window = service["window"].to<JsonArray>();
-    FormatHhmm(pCfg.service.windowStartMin, hhmm);
+    JsonObject test = doc["test"].to<JsonObject>();
+    JsonArray window = test["window"].to<JsonArray>();
+    FormatHhmm(pCfg.test.windowStartMin, hhmm);
     window.add(std::string_view(hhmm));
-    FormatHhmm(pCfg.service.windowEndMin, hhmm);
+    FormatHhmm(pCfg.test.windowEndMin, hhmm);
     window.add(std::string_view(hhmm));
-    service["settle_s"] = pCfg.service.settleS;
-    service["tail_s"] = pCfg.service.tailS;
-    service["min_headroom_pct"] = pCfg.service.minHeadroomPct;
-    service["inconclusive_days"] = pCfg.service.inconclusiveDays;
-    service["chirp"] = pCfg.service.chirp;
-    service["induce_deficit_s"] = pCfg.service.induceDeficitS;
-    service["induce_deficit_device"] = pCfg.service.induceDeficitDevice;
+    test["settle_s"] = pCfg.test.settleS;
+    test["tail_s"] = pCfg.test.tailS;
+    test["min_headroom_pct"] = pCfg.test.minHeadroomPct;
+    test["inconclusive_days"] = pCfg.test.inconclusiveDays;
+    test["chirp"] = pCfg.test.chirp;
+    test["induce_deficit_s"] = pCfg.test.induceDeficitS;
+    test["induce_deficit_device"] = pCfg.test.induceDeficitDevice;
+    test["exclusive"] = pCfg.test.exclusive;
+    test["no_fail_above_mgl"] = pCfg.test.noFailAboveMgl;
 
     JsonObject correction = doc["correction"].to<JsonObject>();
     correction["scale"] = pCfg.correction.scale;
@@ -585,14 +888,14 @@ std::size_t Write(const Config& pCfg, std::span<char> pOut)
     for(std::size_t i = 0; i < 5; ++i)
     {
         JsonObject o = signals[SIGNAL_KEYS[i]].to<JsonObject>();
-        o["buzzer"] = BUZZER_NAMES[static_cast<uint8_t>(all[i]->buzzer)];
+        o["buzzer"] = Name(all[i]->buzzer);
         o["volume"] = all[i]->volume;
     }
 
     JsonObject ntfy = doc["ntfy"].to<JsonObject>();
     ntfy["enabled"] = pCfg.ntfy.enabled;
     ntfy["topic"] = pCfg.ntfy.topic.view();
-    ntfy["min_level"] = LEVEL_NAMES[static_cast<uint8_t>(pCfg.ntfy.minLevel)];
+    ntfy["min_level"] = Name(pCfg.ntfy.minLevel);
 
     if(measureJson(doc) + 1 > pOut.size()) return 0;
     return serializeJson(doc, pOut.data(), pOut.size());

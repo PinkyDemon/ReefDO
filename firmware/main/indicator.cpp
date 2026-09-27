@@ -58,15 +58,15 @@ bool Blink(uint32_t pTMs, uint32_t pPeriodMs)
     return pTMs % pPeriodMs < pPeriodMs / 2;
 }
 
-// Fixed LED codes: green steady = all OK and online, green 0.5 Hz = OK but offline,
-// blue 1 Hz / yellow 2 Hz / red 4 Hz = that alert, purple 2 Hz = FAULT, cyan = maintenance,
-// white pulse = service run, purple flash over anything = a device failed its check.
+// Fixed LED codes: green steady = all OK and online, green 0.5 Hz = OK but offline, blue 1 Hz / yellow 2 Hz /
+// red 4 Hz = that alert, blue/red alternating = FAULT, cyan = maintenance, white pulse = test run, purple flash
+// over anything = a device failed its check.
 Rgb LedFrame(const sampler::Indication& pIn, uint32_t pTMs, bool pPressed, bool pOnline)
 {
     const float bright = static_cast<float>(pIn.signals.ledBrightness) / 100.0f;
     if(pPressed) return Scale({255, 255, 255}, bright);
     if(pIn.anyFailed && pTMs % 2000 < 250) return Scale({200, 0, 200}, bright);
-    if(pIn.serviceRunning) return Scale({255, 255, 255}, bright * (0.2f + 0.8f * Breathe(pTMs, 1500)));
+    if(pIn.testRunning) return Scale({255, 255, 255}, bright * (0.2f + 0.8f * Breathe(pTMs, 1500)));
     if(pIn.maintenance) return Scale({0, 180, 180}, bright);
     if(pIn.fault) return Blink(pTMs, 250) ? Scale({0, 0, 255}, bright) : Scale({255, 0, 0}, bright); // police
     switch(pIn.effective)
@@ -143,9 +143,9 @@ void Task(void*)
         const Rgb c = LedFrame(in, tMs, pressed, net::GetStatus().connected);
         board::LedRgb(c.r, c.g, c.b);
 
-        // The ladder gates the buzzer (Off when silenced, in maintenance, at Blue); config shapes it.
+        // The ladder gates the buzzer (not at Normal, not silenced, not in maintenance); config shapes it.
         const Signal& s = in.signals.of(in.effective, in.fault);
-        bool on = in.buzzer != reefdo::ladder::Buzzer::Off && BuzzerOn(s.buzzer, tMs);
+        bool on = in.sound && BuzzerOn(s.buzzer, tMs);
         uint32_t hz = in.signals.buzzerHz;
         uint32_t volume = s.volume;
         if(tMs < chirpUntil)

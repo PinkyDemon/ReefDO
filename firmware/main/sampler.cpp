@@ -29,20 +29,41 @@ namespace
 
 const char* const TAG = "sampler";
 constexpr uint32_t UNIX_KNOWN_FROM = 1'600'000'000u; // anything earlier is the 1970 default, not a set clock
-constexpr uint32_t SERVICE_BLOB_MAGIC = 0x53564331;  // "SVC1": layout tag for the persisted service outcomes
+constexpr uint32_t TEST_BLOB_MAGIC = 0x53564331;     // "SVC1": layout tag for the persisted test outcomes
 
 // NVS keys
 const char* const KEY_CONFIG = "cfg";
-const char* const KEY_SERVICE = "svc";
+const char* const KEY_TEST = "svc"; // the old name, so the stored test history survives the rename
 const char* const KEY_PROBE = "probe";
 const char* const KEY_TZ = "tz";
 
-struct ServiceBlob
+struct TestBlob
 {
     uint32_t magic;
     uint32_t size;
-    reefdo::service::Persistent p;
+    reefdo::selftest::Persistent p;
 };
+
+// selftest::Persistent as it was with six fixed devices (up to 1.1.0-rc1): loaded once, saved in the new layout.
+constexpr std::size_t SIX = 6;
+struct PersistentSix
+{
+    std::array<reefdo::selftest::Outcome, SIX> lastOutcome;
+    std::array<float, SIX> lastResponse;
+    std::array<bool, SIX> failActive;
+    uint32_t inconclusiveStreak;
+    bool inconclusiveAlert;
+    std::optional<uint32_t> lastRunDay;
+};
+struct TestBlobSix
+{
+    uint32_t magic;
+    uint32_t size;
+    PersistentSix p;
+};
+static_assert(sizeof(TestBlob) >= sizeof(TestBlobSix), "one buffer reads both layouts");
+
+static_assert(static_cast<std::size_t>(board::RELAY_COUNT) == reefdo::RELAYS, "the core's relay count is the board's");
 
 struct Host
 {
@@ -59,7 +80,7 @@ struct Host
     bool hung = false;
     bool imageValid = false;
     SemaphoreHandle_t mtx = nullptr;
-    char json[4096];                    // scratch for config documents (under the lock)
+    char json[reefdo::config::DOC_MAX]; // scratch for config documents (under the lock)
     char configState[160] = "defaults"; // "stored", "defaults" or "rejected at <path>: <message>"
 };
 Host sHost;
@@ -95,25 +116,43 @@ bool SaveConfig()
            hal::nvs::SetBlob(KEY_CONFIG, std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(sHost.json), n));
 }
 
-void LoadService()
+void LoadTest()
 {
-    ServiceBlob blob{};
+    TestBlob blob{};
     std::size_t len = 0;
-    if(!hal::nvs::GetBlob(KEY_SERVICE, std::span<uint8_t>(reinterpret_cast<uint8_t*>(&blob), sizeof blob), len)) return;
-    if(len != sizeof blob || blob.magic != SERVICE_BLOB_MAGIC || blob.size != sizeof blob.p)
+    if(!hal::nvs::GetBlob(KEY_TEST, std::span<uint8_t>(reinterpret_cast<uint8_t*>(&blob), sizeof blob), len)) return;
+    if(len == sizeof blob && blob.magic == TEST_BLOB_MAGIC && blob.size == sizeof blob.p)
     {
-        ESP_LOGW(TAG, "stored service history has another layout: dropped");
+        sHost.app->RestoreTest(blob.p);
         return;
     }
-    sHost.app->RestoreService(blob.p);
+    TestBlobSix six{};
+    std::memcpy(&six, &blob, sizeof six);
+    if(len != sizeof six || six.magic != TEST_BLOB_MAGIC || six.size != sizeof six.p)
+    {
+        ESP_LOGW(TAG, "stored test history has another layout: dropped");
+        return;
+    }
+    reefdo::selftest::Persistent p;
+    for(std::size_t i = 0; i < SIX && i < reefdo::DEVICES; ++i)
+    {
+        p.lastOutcome[i] = six.p.lastOutcome[i];
+        p.lastResponse[i] = six.p.lastResponse[i];
+        p.failActive[i] = six.p.failActive[i];
+    }
+    p.inconclusiveStreak = six.p.inconclusiveStreak;
+    p.inconclusiveAlert = six.p.inconclusiveAlert;
+    p.lastRunDay = six.p.lastRunDay;
+    sHost.app->RestoreTest(p);
+    ESP_LOGI(TAG, "test history carried over from the six-device layout");
 }
 
-void SaveService()
+void SaveTest()
 {
-    ServiceBlob blob{SERVICE_BLOB_MAGIC, sizeof(reefdo::service::Persistent), sHost.app->ServicePersistent()};
-    if(!hal::nvs::SetBlob(KEY_SERVICE, std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&blob), sizeof blob)))
+    TestBlob blob{TEST_BLOB_MAGIC, sizeof(reefdo::selftest::Persistent), sHost.app->TestPersistent()};
+    if(!hal::nvs::SetBlob(KEY_TEST, std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&blob), sizeof blob)))
     {
-        ESP_LOGE(TAG, "service history not saved");
+        ESP_LOGE(TAG, "test history not saved");
     }
 }
 
@@ -154,8 +193,9 @@ uint16_t LocalMinute(const reefdo::app::Clock& pC)
 
 void LogNotification(const reefdo::app::Notification& pN)
 {
-    static const char* const KIND[] = {
-        "level", "fault", "fault-cleared", "recovered", "service-fail", "service-inconclusive", "boot"};
+    static const char* const KIND[] = {"level",     "fault",       "fault-cleared",
+                                       "recovered", "test-fail",   "test-inconclusive",
+                                       "boot",      "device-lost", "device-back"};
     ESP_LOGW(TAG, "notify %s%s: level=%d device=%u value=%.2f%s", KIND[static_cast<int>(pN.kind)],
              pN.repeat ? " (repeat)" : "", static_cast<int>(pN.level), pN.device, static_cast<double>(pN.value),
              pN.urgent ? " URGENT" : "");
@@ -180,7 +220,7 @@ void MarkImageValid(const reefdo::app::Status& pS)
 void ApplyRelaysLocked()
 {
     const reefdo::app::Status& s = sHost.app->GetStatus();
-    for(std::size_t i = 0; i < reefdo::app::DEVICES; ++i)
+    for(std::size_t i = 0; i < reefdo::RELAYS; ++i)
         board::SetRelay(static_cast<int>(i), s.relayEnergised[i]);
 }
 
@@ -194,11 +234,10 @@ void TickLocked()
     ApplyRelaysLocked();
 
     sHost.ind.effective = s.effective;
-    sHost.ind.buzzer = s.buzzer;
-    sHost.ind.led = s.led;
+    sHost.ind.sound = s.sound;
     sHost.ind.fault = s.fault;
     sHost.ind.maintenance = s.maintenance;
-    sHost.ind.serviceRunning = s.serviceRunning;
+    sHost.ind.testRunning = s.testRunning;
     sHost.ind.anyFailed = false;
     for(const bool f : s.deviceFailed)
         sHost.ind.anyFailed |= f;
@@ -210,7 +249,7 @@ void TickLocked()
         LogNotification(n);
         notify::Push(n, sHost.cfg);
     }
-    if(sHost.app->ServicePersistentChanged()) SaveService();
+    if(sHost.app->TestPersistentChanged()) SaveTest();
     MarkImageValid(s);
 }
 
@@ -297,9 +336,13 @@ bool ApplyConfigJson(std::string_view pJson, reefdo::config::LoadResult& pOut)
     pOut = reefdo::api::ApplyConfig(*sHost.app, pJson, ClockNow());
     if(!pOut.Ok()) return false;
     sHost.cfg = sHost.app->GetConfig();
+    if(sHost.rk500) sHost.rk500->SetConfig(ProbeConfig()); // stuck_minutes, sample_period_s, allow_zero_cal
     if(!SaveConfig())
     {
         ESP_LOGE(TAG, "config applied but not saved");
+        pOut.error = reefdo::config::LoadError::Invalid;
+        pOut.path.assign("nvs");
+        pOut.message.assign("applied, but not saved to flash: lost at the next reboot");
         return false;
     }
     std::strcpy(sHost.configState, "stored");
@@ -311,13 +354,15 @@ bool ResetConfig()
     Guard guard;
     sHost.cfg = reefdo::config::Defaults();
     sHost.app->SetConfig(sHost.cfg, ClockNow());
+    if(sHost.rk500) sHost.rk500->SetConfig(ProbeConfig());
+    std::strcpy(sHost.configState, "defaults");
     return hal::nvs::EraseKey(KEY_CONFIG);
 }
 
 std::size_t ConfigJson(std::span<char> pOut)
 {
     Guard guard;
-    return reefdo::config::Write(sHost.app->GetConfig(), pOut);
+    return reefdo::config::Write(sHost.app->GetConfig(), pOut, true); // local keys stay on the board
 }
 
 void SetTime(uint32_t pUnixS, std::optional<int32_t> pTzOffsetS)
@@ -374,7 +419,7 @@ bool Start()
 
     reefdo::probe::IProbe& probe = BuildProbe();
     sHost.app.emplace(sHost.cfg, probe, reefdo::app::Stores{sHost.a, sHost.b, sHost.e, sHost.d});
-    LoadService();
+    LoadTest();
     sHost.app->Start(ClockNow(), static_cast<uint32_t>(esp_reset_reason()));
     TickLocked(); // outputs settle before anything else runs
 

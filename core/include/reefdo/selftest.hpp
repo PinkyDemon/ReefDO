@@ -1,5 +1,5 @@
 #pragma once
-// The daily service run: exercise each device with serviceS > 0 inside the evening window and measure the
+// The daily test run: exercise each device with testS > 0 inside the evening window and measure the
 // tank's response against the pre-run trend. Pure function of (state, input, config).
 #include <array>
 #include <cstddef>
@@ -10,10 +10,8 @@
 #include "reefdo/fixed_vector.hpp"
 #include "reefdo/ladder.hpp"
 
-namespace reefdo::service
+namespace reefdo::selftest
 {
-
-constexpr std::size_t DEVICES = ladder::DEVICES;
 
 enum class Outcome : uint8_t
 {
@@ -29,7 +27,8 @@ enum class Skip : uint8_t
     Fault,
     Maintenance,
     Missed,
-    NothingToRun
+    NothingToRun,
+    DeviceOut // a device the run would exercise is out of order (device maintenance)
 };
 enum class Phase : uint8_t
 {
@@ -42,22 +41,26 @@ enum class Phase : uint8_t
 
 struct DeviceConfig
 {
-    uint32_t serviceS = 0;       // 0 = not exercised
-    float minResponsePct = 0.0f; // 0 = run but don't judge
+    uint32_t testS = 0;          // daily run duration; 0 = not exercised
+    float minResponsePct = 0.0f; // saturation-% response the check demands; 0 = run but don't judge
+    bool operator==(const DeviceConfig&) const = default;
 };
 
 struct Config
 {
-    uint16_t windowStartMin = 19 * 60;
+    uint16_t windowStartMin = 19 * 60; // local minutes after midnight
     uint16_t windowEndMin = 19 * 60 + 30;
     uint32_t settleS = 120;
     uint32_t tailS = 60;
     float minHeadroomPct = 3.0f;
     uint32_t inconclusiveDays = 5;
     bool chirp = true;
-    uint32_t induceDeficitS = 0;
-    uint32_t induceDeficitDevice = 0; // 1..6
+    uint32_t induceDeficitS = 0;      // 0 = off
+    uint32_t induceDeficitDevice = 0; // device number, 1-based; only meaningful when induceDeficitS > 0
+    float noFailAboveMgl = 6.1f;      // a FAIL from a start at or above this DO is unchecked (~90 % at 25 C, 35 psu)
+    bool exclusive = true; // only the tested device runs; false: devices are exercised, nothing is measured or judged
     std::array<DeviceConfig, DEVICES> devices{};
+    bool operator==(const Config&) const = default;
 };
 
 struct LocalTime
@@ -71,21 +74,23 @@ struct Input
     uint64_t nowMs = 0;
     std::optional<LocalTime> local; // nullopt = clock unknown
     std::optional<float> satPct;    // median-filtered saturation; nullopt = probe failed
+    std::optional<float> doMgl;     // median-filtered, corrected mg/L, from the same reading
     ladder::Level level = ladder::Level::Normal;
     bool fault = false;
     bool maintenance = false;
-    bool runNow = false; // UI / console "Run now"
+    std::array<bool, DEVICES> deviceOut{}; // out of order (device maintenance): a run that needs one ends, unjudged
+    bool runNow = false;                   // UI / console "Run now"
 };
 
 enum class EventType : uint8_t
 {
     RunStart,          // aux: judged (1) / not judged (0), clock_unknown flag in `clock_unknown`
     DeviceStart,       // device
-    DeviceEnd,         // device, outcome, response
+    DeviceEnd,         // device, outcome, response, DO at its start; highDo: a FAIL let off (noFailAboveMgl)
     RunEnd,            // aborted flag in `aborted`
     Skipped,           // skip reason
     FailAlert,         // device: a check failed (raised once per run that fails)
-    FailCleared,       // device: a later run passed
+    FailCleared,       // device: a later run passed, or checks were switched off (test.exclusive)
     InconclusiveAlert, // inconclusive_days in a row
 };
 
@@ -99,17 +104,19 @@ struct Event
     bool clockUnknown = false;
     bool aborted = false;
     bool judged = false;
+    bool highDo = false; // DeviceEnd: missed the response, but started at or above noFailAboveMgl → Unchecked
+    float doMgl = 0.0f;  // DeviceEnd: DO when the device started
 };
 
 struct Output
 {
-    std::array<bool, DEVICES> deviceOn{}; // service demands (merged with the ladder's by the app)
+    std::array<bool, DEVICES> deviceOn{}; // test demands (merged with the ladder's by the app)
     std::optional<uint8_t> cutDevice;     // induced deficit in progress: force this device off
     bool running = false;                 // LED white pulse
     bool chirp = false;                   // one tick, at run start (if configured)
     std::array<bool, DEVICES> failed{};   // → ladder::Input::device_failed
     bool inconclusiveAlert = false;
-    FixedVector<Event, 8> events;
+    FixedVector<Event, DEVICES + 8> events; // a FailCleared per device at most, plus the run events
 };
 
 // What survives a reboot (the app stores it in NVS).
@@ -138,6 +145,7 @@ struct State
     bool clockUnknown = false;
     bool aborted = false;
     float sat0 = 0.0f;   // baseline at device start
+    float do0 = 0.0f;    // DO (mg/L) at device start
     float slope0 = 0.0f; // %/10 min at device start
     float peak = 0.0f;   // peak |deviation| during run + tail
     std::optional<uint64_t> lastRunMs;
@@ -145,9 +153,9 @@ struct State
     std::optional<uint32_t> attemptedDay; // the day a window attempt was made (missed or started)
 };
 
-// Total seconds a full run needs (all serviced devices, gaps, tail, deficit).
+// Total seconds a full run needs (all tested devices, gaps, tail, deficit).
 uint32_t RunDurationS(const Config& pCfg);
 
 Output Step(State& pS, const Input& pIn, const Config& pCfg);
 
-} // namespace reefdo::service
+} // namespace reefdo::selftest

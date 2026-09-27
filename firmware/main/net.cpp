@@ -31,6 +31,16 @@ constexpr uint32_t AP_AFTER_MS = 120000; // station not up for this long → rai
 esp_netif_t* sSta = nullptr;
 esp_netif_t* sAp = nullptr;
 Status sStatus;
+portMUX_TYPE sLock = portMUX_INITIALIZER_UNLOCKED; // sStatus: written by the event and watch tasks, read by any
+
+// Every change to sStatus goes through here, so a reader on another task never copies half an update.
+template <class F>
+void Update(F pChange)
+{
+    taskENTER_CRITICAL(&sLock);
+    pChange(sStatus);
+    taskEXIT_CRITICAL(&sLock);
+}
 bool sApStarted = false;
 bool sStaConfigured = false;
 int64_t sLastConnectedMs = 0;
@@ -47,7 +57,7 @@ void StartAp()
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &cfg));
     sApStarted = true;
-    sStatus.apActive = true;
+    Update([](Status& pS) { pS.apActive = true; });
     ESP_LOGW(TAG, "setup AP '%s' up: http://192.168.4.1/", AP_SSID);
 }
 
@@ -56,7 +66,7 @@ void StopAp()
     if(!sApStarted) return;
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     sApStarted = false;
-    sStatus.apActive = false;
+    Update([](Status& pS) { pS.apActive = false; });
     ESP_LOGI(TAG, "setup AP down");
 }
 
@@ -74,7 +84,7 @@ bool ConfigureSta()
     cfg.sta.threshold.authmode = pass[0] ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
     cfg.sta.pmf_cfg.capable = true;
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &cfg));
-    sStatus.ssid.assign(ssid);
+    Update([&ssid](Status& pS) { pS.ssid.assign(ssid); });
     sStaConfigured = true;
     return true;
 }
@@ -87,8 +97,12 @@ void OnWifi(void*, esp_event_base_t, int32_t pId, void*)
             if(sStaConfigured) esp_wifi_connect();
             break;
         case WIFI_EVENT_STA_DISCONNECTED:
-            sStatus.connected = false;
-            sStatus.ip.assign("");
+            Update(
+                [](Status& pS)
+                {
+                    pS.connected = false;
+                    pS.ip.clear();
+                });
             if(sStaConfigured) esp_wifi_connect();
             break;
         default: break;
@@ -101,8 +115,12 @@ void OnIp(void*, esp_event_base_t, int32_t pId, void* pData)
     const ip_event_got_ip_t* e = static_cast<const ip_event_got_ip_t*>(pData);
     char ip[16] = {};
     std::snprintf(ip, sizeof ip, IPSTR, IP2STR(&e->ip_info.ip));
-    sStatus.ip.assign(ip);
-    sStatus.connected = true;
+    Update(
+        [&ip](Status& pS)
+        {
+            pS.ip.assign(ip);
+            pS.connected = true;
+        });
     sLastConnectedMs = esp_timer_get_time() / 1000;
     ESP_LOGI(TAG, "connected: %s", ip);
     StopAp();
@@ -110,7 +128,7 @@ void OnIp(void*, esp_event_base_t, int32_t pId, void* pData)
 
 void OnTimeSync(timeval*)
 {
-    sStatus.timeSynced = true;
+    Update([](Status& pS) { pS.timeSynced = true; });
     ESP_LOGI(TAG, "clock set by SNTP");
 }
 
@@ -121,12 +139,10 @@ void Watch(void*)
     {
         vTaskDelay(pdMS_TO_TICKS(1000));
         const int64_t now = esp_timer_get_time() / 1000;
-        if(!sStatus.connected && now - sLastConnectedMs > AP_AFTER_MS) StartAp();
-        if(sStatus.connected)
-        {
-            wifi_ap_record_t ap = {};
-            if(esp_wifi_sta_get_ap_info(&ap) == ESP_OK) sStatus.rssi = ap.rssi;
-        }
+        const bool connected = GetStatus().connected;
+        if(!connected && now - sLastConnectedMs > AP_AFTER_MS) StartAp();
+        wifi_ap_record_t ap = {};
+        if(connected && esp_wifi_sta_get_ap_info(&ap) == ESP_OK) Update([&ap](Status& pS) { pS.rssi = ap.rssi; });
     }
 }
 
@@ -168,7 +184,10 @@ void Start()
 
 Status GetStatus()
 {
-    return sStatus;
+    taskENTER_CRITICAL(&sLock);
+    const Status s = sStatus;
+    taskEXIT_CRITICAL(&sLock);
+    return s;
 }
 
 bool SetCredentials(std::string_view pSsid, std::string_view pPassword)
@@ -186,7 +205,7 @@ void Forget()
     hal::nvs::EraseKey(KEY_SSID);
     hal::nvs::EraseKey(KEY_PASS);
     sStaConfigured = false;
-    sStatus.ssid.assign("");
+    Update([](Status& pS) { pS.ssid.clear(); });
     esp_wifi_disconnect();
     StartAp();
 }

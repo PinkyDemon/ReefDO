@@ -21,16 +21,19 @@ public:
     virtual bool Write(std::string_view pChunk) = 0;
 };
 
-// JSON builders. Return bytes written (no terminator), 0 if the buffer is too small.
+// JSON builders. Return bytes written (no terminator), 0 if the buffer is too small; JSON_MAX always suffices
+// (the config document is the largest; a test checks the status document too).
+constexpr std::size_t JSON_MAX = config::DOC_MAX;
 std::size_t StatusJson(const app::App& pApp, const app::Clock& pClock, std::span<char> pOut);
-std::size_t ServiceJson(const app::App& pApp, std::span<char> pOut);
+std::size_t TestJson(const app::App& pApp, std::span<char> pOut);
 
 // PUT /api/config: parse, validate, apply. `out` receives {"ok":true} or {"ok":false,"path":..,"message":..}.
 config::LoadResult ApplyConfig(app::App& pApp, std::string_view pJson, const app::Clock& pClock);
 std::size_t ResultJson(const config::LoadResult& pR, std::span<char> pOut);
 
-// POST /api/cmd, one command per document: {"ack":true} · {"maintenance":b} · {"service":"run"} · {"cal":"air"}
-// · {"relay":{"device":1..6,"on":b|null}} · {"time":{"unix":s,"tz":s}}
+// POST /api/cmd, one command per document: {"ack":true} · {"maintenance":b} · {"test":"run"} · {"cal":"air"}
+// · {"suspend":{"device":n,"s":n}} · {"manual":{"device":n,"on":b|null}} (n = the device number, 1..DEVICES)
+// · {"time":{"unix":s,"tz":s}}
 struct Command
 {
     bool ok = false;

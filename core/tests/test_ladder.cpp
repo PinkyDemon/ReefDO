@@ -69,16 +69,15 @@ bool HasEvent(const Output& pO, EventType pT)
 
 } // namespace
 
-TEST_CASE("Normal: nothing on, green, silent; pulse devices are powered", "[ladder]")
+TEST_CASE("Normal: nothing on, silent; pulse devices are powered", "[ladder]")
 {
     Bench b;
     const Output o = b.Hold(6.5f, 3600);
     REQUIRE(o.level == Level::Normal);
     REQUIRE(o.effective == Level::Normal);
-    REQUIRE(o.led == Led::Green);
-    REQUIRE(o.buzzer == Buzzer::Off);
+    REQUIRE_FALSE(o.sound);
     REQUIRE_FALSE(o.fault);
-    REQUIRE(o.deviceOn == std::array<bool, 6>{false, false, false, false, true, false});
+    REQUIRE(o.deviceOn == std::array<bool, reefdo::DEVICES>{false, false, false, false, true, false});
     REQUIRE(o.events.empty());
 }
 
@@ -90,8 +89,7 @@ TEST_CASE("Blue enters below mgl - h only after dwell; devices and pulse follow"
     o = b.Tick(5.60f); // 120 s
     REQUIRE(o.level == Level::Blue);
     REQUIRE(o.effective == Level::Blue);
-    REQUIRE(o.led == Led::Blue);
-    REQUIRE(o.buzzer == Buzzer::Beep); // may sound; the configured pattern decides
+    REQUIRE(o.sound); // may sound; the configured pattern decides
     REQUIRE(HasEvent(o, EventType::LevelChange));
     REQUIRE(HasEvent(o, EventType::EffectiveChange));
     REQUIRE(HasEvent(o, EventType::Pulse));
@@ -157,9 +155,8 @@ TEST_CASE("Red is immediate and may be reached from Normal directly", "[ladder]"
     Bench b;
     const Output o = b.Tick(4.20f);
     REQUIRE(o.level == Level::Red);
-    REQUIRE(o.led == Led::Red);
-    REQUIRE(o.buzzer == Buzzer::Continuous);
-    REQUIRE(o.deviceOn == std::array<bool, 6>{true, true, true, true, false, false}); // pump pulsing
+    REQUIRE(o.sound);
+    REQUIRE(o.deviceOn == std::array<bool, reefdo::DEVICES>{true, true, true, true, false, false}); // pump pulsing
 }
 
 TEST_CASE("Yellow: audible, siren on, Blue devices stay on", "[ladder]")
@@ -170,8 +167,7 @@ TEST_CASE("Yellow: audible, siren on, Blue devices stay on", "[ladder]")
     REQUIRE(o.level == Level::Blue);
     o = b.Tick(5.00f); // 60 s dwell
     REQUIRE(o.level == Level::Yellow);
-    REQUIRE(o.led == Led::Yellow);
-    REQUIRE(o.buzzer == Buzzer::Beep);
+    REQUIRE(o.sound);
     REQUIRE(o.deviceOn[0]);
     REQUIRE(o.deviceOn[2]);
     REQUIRE(o.deviceOn[3]);
@@ -189,7 +185,6 @@ TEST_CASE("Recovery from Red steps one level at a time", "[ladder]")
     REQUIRE(b.Hold(7.0f, 590).level == Level::Blue);
     const Output o = b.Tick(7.0f);
     REQUIRE(o.level == Level::Normal);
-    REQUIRE(o.led == Led::Green);
 }
 
 TEST_CASE("FAULT after five failed polls: loud, acts as Yellow, clears on the next reading", "[ladder]")
@@ -207,8 +202,7 @@ TEST_CASE("FAULT after five failed polls: loud, acts as Yellow, clears on the ne
     REQUIRE(HasEvent(o, EventType::FaultEnter));
     REQUIRE(o.level == Level::Normal);
     REQUIRE(o.effective == Level::Red); // fault_level defaults to Red
-    REQUIRE(o.buzzer == Buzzer::FaultTriple);
-    REQUIRE(o.led == Led::Purple);
+    REQUIRE(o.sound);
     REQUIRE(o.deviceOn[0]);
     REQUIRE(o.deviceOn[2]);
     REQUIRE(o.deviceOn[3]);
@@ -223,7 +217,7 @@ TEST_CASE("FAULT after five failed polls: loud, acts as Yellow, clears on the ne
     REQUIRE_FALSE(o.fault);
     REQUIRE(HasEvent(o, EventType::FaultClear));
     REQUIRE(o.effective == Level::Normal);
-    REQUIRE(o.buzzer == Buzzer::Off);
+    REQUIRE_FALSE(o.sound);
 }
 
 TEST_CASE("Failures must be consecutive to count", "[ladder]")
@@ -245,7 +239,7 @@ TEST_CASE("FAULT freezes the level machine and never lowers an existing level", 
     REQUIRE(o.fault);
     REQUIRE(o.level == Level::Red);
     REQUIRE(o.effective == Level::Red);
-    REQUIRE(o.buzzer == Buzzer::FaultTriple);
+    REQUIRE(o.sound);
 }
 
 TEST_CASE("fault_level is clamped to at least Yellow; Red is honoured", "[ladder]")
@@ -258,7 +252,6 @@ TEST_CASE("fault_level is clamped to at least Yellow; Red is honoured", "[ladder
     r.cfg.faultLevel = Level::Red;
     const Output o = r.Hold(std::nullopt, 50);
     REQUIRE(o.effective == Level::Red);
-    REQUIRE(o.led == Led::Purple);
 }
 
 TEST_CASE("Ack silences buzzer and siren, not the pumps; expires; deeper re-arms", "[ladder]")
@@ -269,7 +262,7 @@ TEST_CASE("Ack silences buzzer and siren, not the pumps; expires; deeper re-arms
     Output o = b.Tick(5.00f, [](Input& pIn) { pIn.ackPressed = true; });
     REQUIRE(HasEvent(o, EventType::Ack));
     REQUIRE(o.silenced);
-    REQUIRE(o.buzzer == Buzzer::Off);
+    REQUIRE_FALSE(o.sound);
     REQUIRE_FALSE(o.deviceOn[3]);
     REQUIRE(o.deviceOn[2]);
     REQUIRE(o.level == Level::Yellow);
@@ -278,14 +271,14 @@ TEST_CASE("Ack silences buzzer and siren, not the pumps; expires; deeper re-arms
     REQUIRE(o.silenced);
     o = b.Tick(5.00f); // 1800 s: silence expires
     REQUIRE_FALSE(o.silenced);
-    REQUIRE(o.buzzer == Buzzer::Beep);
+    REQUIRE(o.sound);
     REQUIRE(o.deviceOn[3]);
 
     b.Tick(5.00f, [](Input& pIn) { pIn.ackPressed = true; });
     o = b.Tick(4.0f); // Red re-arms immediately
     REQUIRE(o.level == Level::Red);
     REQUIRE_FALSE(o.silenced);
-    REQUIRE(o.buzzer == Buzzer::Continuous);
+    REQUIRE(o.sound);
 }
 
 TEST_CASE("An effective deepening (escalation) re-arms an acknowledged alarm", "[ladder]")
@@ -294,11 +287,11 @@ TEST_CASE("An effective deepening (escalation) re-arms an acknowledged alarm", "
     b.Hold(5.00f, 60);
     b.Tick(5.00f, [](Input& pIn) { pIn.ackPressed = true; });
     REQUIRE(b.st.ackUntilMs.has_value());
-    // device 3 (Yellow) reported dead by the service check → Yellow acts as Red
+    // device 3 (Yellow) reported dead by the test → Yellow acts as Red
     const Output o = b.Tick(5.00f, [](Input& pIn) { pIn.deviceFailed[2] = true; });
     REQUIRE(o.effective == Level::Red);
     REQUIRE_FALSE(o.silenced);
-    REQUIRE(o.buzzer == Buzzer::Continuous);
+    REQUIRE(o.sound);
 }
 
 TEST_CASE("Blue keeps a siren assigned to it off; the buzzer may sound if configured", "[ladder]")
@@ -308,7 +301,7 @@ TEST_CASE("Blue keeps a siren assigned to it off; the buzzer may sound if config
     Output o = b.Hold(5.60f, 120);
     REQUIRE(o.level == Level::Blue);
     REQUIRE_FALSE(o.deviceOn[3]);
-    REQUIRE(o.buzzer == Buzzer::Beep);
+    REQUIRE(o.sound);
     o = b.Hold(5.00f, 60);
     REQUIRE(o.level == Level::Yellow);
     REQUIRE(o.deviceOn[3]);
@@ -477,15 +470,14 @@ TEST_CASE("is_night handles a window that wraps midnight and one that does not",
     REQUIRE_FALSE(IsNight(uint16_t{6 * 60}, c));
 }
 
-TEST_CASE("A device that failed its service check makes its level act one deeper", "[ladder]")
+TEST_CASE("A device that failed its test makes its level act one deeper", "[ladder]")
 {
     Bench b;
     const auto failedBubbler = [](Input& pIn) { pIn.deviceFailed[0] = true; };
     Output o = b.Hold(5.60f, 120, failedBubbler);
     REQUIRE(o.level == Level::Blue);
     REQUIRE(o.effective == Level::Yellow);
-    REQUIRE(o.buzzer == Buzzer::Beep);
-    REQUIRE(o.led == Led::Yellow);
+    REQUIRE(o.sound);
     REQUIRE(o.deviceOn[2]);
     REQUIRE(o.deviceOn[3]);
 
@@ -518,14 +510,13 @@ TEST_CASE("A device that failed its service check makes its level act one deeper
     }
 }
 
-TEST_CASE("Maintenance mutes buzzer and siren, shows cyan, and keeps level-driven devices on", "[ladder]")
+TEST_CASE("Maintenance mutes buzzer and siren, and keeps level-driven devices on", "[ladder]")
 {
     Bench b;
     b.Hold(5.00f, 60);
     const Output o = b.Tick(5.00f, [](Input& pIn) { pIn.maintenance = true; });
     REQUIRE(o.level == Level::Yellow);
-    REQUIRE(o.buzzer == Buzzer::Off);
-    REQUIRE(o.led == Led::Cyan);
+    REQUIRE_FALSE(o.sound);
     REQUIRE_FALSE(o.deviceOn[3]);
     REQUIRE(o.deviceOn[2]);
     REQUIRE(o.deviceOn[0]);
@@ -582,7 +573,7 @@ TEST_CASE("fault.alert off: failed polls are counted but FAULT never fires", "[l
     o = b.Hold(std::nullopt, 600);
     REQUIRE_FALSE(o.fault);
     REQUIRE(o.effective == Level::Normal);
-    REQUIRE(o.buzzer == Buzzer::Off);
+    REQUIRE_FALSE(o.sound);
     REQUIRE_FALSE(HasEvent(o, EventType::FaultEnter));
     o = b.Tick(6.5f);
     REQUIRE_FALSE(HasEvent(o, EventType::FaultClear));

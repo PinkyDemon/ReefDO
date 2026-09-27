@@ -5,12 +5,11 @@
 #include <cstdint>
 #include <span>
 
+#include "reefdo/devices.hpp"
 #include "reefdo/probe.hpp"
 
 namespace reefdo::sim
 {
-
-constexpr std::size_t DEVICES = 6;
 
 struct TankConfig
 {

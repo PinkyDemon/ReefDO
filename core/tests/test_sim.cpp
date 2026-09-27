@@ -11,7 +11,7 @@ using reefdo::probe::Status;
 
 namespace
 {
-const std::array<bool, 6> ALL_OFF{};
+const std::array<bool, reefdo::DEVICES> ALL_OFF{};
 }
 
 TEST_CASE("Tank: photosynthesis by day, respiration at night, exchange pulls toward 100 %", "[sim]")
@@ -33,7 +33,7 @@ TEST_CASE("Tank: photosynthesis by day, respiration at night, exchange pulls tow
     REQUIRE_THAT(t.TempC(), WithinAbs(25.6, 1e-4));
     REQUIRE_THAT(t.DoMgl(), WithinAbs(reefdo::solubility::MglFromSaturation(t.SatPct(), 25.6f, 35.0f), 1e-4));
 
-    std::array<bool, 6> bubbler{};
+    std::array<bool, reefdo::DEVICES> bubbler{};
     bubbler[0] = true;
     t.SetDeviceK(0, 3.0f);
     for(int i = 0; i < 360; ++i)
@@ -47,7 +47,7 @@ TEST_CASE("Tank: a stalled return pump stops the exchange until a power cycle", 
     c.returnPumpDevice = 4;
     c.sat0Pct = 95.0f;
     Tank t(c);
-    std::array<bool, 6> on{};
+    std::array<bool, reefdo::DEVICES> on{};
     on[4] = true;
     t.StallReturnPump(true);
     REQUIRE(t.ReturnPumpStalled());

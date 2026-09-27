@@ -20,7 +20,7 @@ Config On()
 Input At(uint16_t pMinute, float pMgl, uint32_t pDay = 5)
 {
     Input in;
-    in.local = reefdo::service::LocalTime{pMinute, pDay};
+    in.local = reefdo::selftest::LocalTime{pMinute, pDay};
     in.doMgl = pMgl;
     return in;
 }
@@ -87,14 +87,14 @@ TEST_CASE("Boost stops when the window closes, and never starts above the target
     REQUIRE_FALSE(Step(fresh, At(19 * 60 + 40, 4.6f), nothing).running);
 }
 
-TEST_CASE("Boost pauses for a service run or maintenance and resumes while the window is open", "[boost]")
+TEST_CASE("Boost pauses for a test run or maintenance and resumes while the window is open", "[boost]")
 {
     State s;
     const Config c = On();
     Output o = Step(s, At(19 * 60 + 31, 4.6f), c);
     REQUIRE(o.running);
     Input busy = At(19 * 60 + 32, 4.7f);
-    busy.serviceRunning = true;
+    busy.testRunning = true;
     o = Step(s, busy, c);
     REQUIRE_FALSE(o.running);
     REQUIRE(Has(o, EventType::Paused));
@@ -102,7 +102,7 @@ TEST_CASE("Boost pauses for a service run or maintenance and resumes while the w
     o = Step(s, busy, c); // still busy: nothing starts
     REQUIRE_FALSE(o.running);
     REQUIRE(o.events.empty());
-    o = Step(s, At(19 * 60 + 40, 4.9f), c); // service over: resumes
+    o = Step(s, At(19 * 60 + 40, 4.9f), c); // test over: resumes
     REQUIRE(o.running);
     Input maint = At(19 * 60 + 41, 5.0f);
     maint.maintenance = true;

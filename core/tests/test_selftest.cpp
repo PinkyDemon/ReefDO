@@ -3,11 +3,11 @@
 
 #include "catch_amalgamated.hpp"
 
-#include "reefdo/service.hpp"
+#include "reefdo/selftest.hpp"
 
 #include "proptest.hpp"
 
-using namespace reefdo::service;
+using namespace reefdo::selftest;
 using Catch::Matchers::WithinAbs;
 using reefdo::ladder::Level;
 
@@ -19,15 +19,15 @@ constexpr uint32_t TICK = 10;
 Config ExampleCfg()
 {
     Config c;
-    c.devices[0] = {300, 1.0f}; // bubbler, judged
-    c.devices[1] = {300, 0.0f}; // powerhead, unchecked
-    c.devices[2] = {300, 1.0f}; // strong pump, judged
+    c.devices[0] = {300, 1.0f};      // bubbler, judged
+    c.devices[1] = {300, 0.0f};      // powerhead, unchecked
+    c.devices[2] = {300, 1.0f};      // strong pump, judged
     c.windowStartMin = 19 * 60 + 30; // the scenarios below are written for 19:30–21:00
     c.windowEndMin = 21 * 60;
     return c;
 }
 
-// Runs the service machine on a clock (10 s ticks) with a scripted tank: `tank(out)` adjusts `sat` each tick.
+// Runs the self-test machine on a clock (10 s ticks) with a scripted tank: `tank(out)` adjusts `sat` each tick.
 struct Bench
 {
     Config cfg = ExampleCfg();
@@ -37,9 +37,11 @@ struct Bench
     uint32_t secOfDay = 19 * 3600; // 19:00
     bool clockKnown = true;
     float sat = 108.0f;
+    float doMgl = 5.0f;
     Level level = Level::Normal;
     bool fault = false;
     bool maintenance = false;
+    std::array<bool, reefdo::DEVICES> deviceOut{};
     bool probeOk = true;
     std::function<void(const Output&)> tank;
     std::vector<Event> events; // everything emitted so far
@@ -50,9 +52,11 @@ struct Bench
         in.nowMs = nowMs;
         if(clockKnown) in.local = LocalTime{static_cast<uint16_t>(secOfDay / 60), day};
         if(probeOk) in.satPct = sat;
+        if(probeOk) in.doMgl = doMgl;
         in.level = level;
         in.fault = fault;
         in.maintenance = maintenance;
+        in.deviceOut = deviceOut;
         in.runNow = pRunNow;
         Output o = Step(st, in, cfg);
         for(const Event& e : o.events)
@@ -110,7 +114,7 @@ struct Bench
 
 } // namespace
 
-TEST_CASE("run_duration_s adds runs, tails, gaps and the deficit", "[service]")
+TEST_CASE("run_duration_s adds runs, tails, gaps and the deficit", "[selftest]")
 {
     Config c = ExampleCfg();
     REQUIRE(RunDurationS(c) == 3 * 300 + 3 * 60 + 2 * 120);
@@ -122,7 +126,7 @@ TEST_CASE("run_duration_s adds runs, tails, gaps and the deficit", "[service]")
     REQUIRE(RunDurationS(Config{}) == 0);
 }
 
-TEST_CASE("A scheduled run starts at the window with headroom and walks the devices in order", "[service]")
+TEST_CASE("A scheduled run starts at the window with headroom and walks the devices in order", "[selftest]")
 {
     Bench b;
     b.ResponsiveTank();
@@ -132,7 +136,7 @@ TEST_CASE("A scheduled run starts at the window with headroom and walks the devi
     o = b.Tick(); // 19:30:00 → start
     REQUIRE(o.running);
     REQUIRE(o.chirp);
-    REQUIRE(o.deviceOn == std::array<bool, 6>{true, false, false, false, false, false});
+    REQUIRE(o.deviceOn == std::array<bool, reefdo::DEVICES>{true, false, false, false, false, false});
     REQUIRE(b.Count(EventType::RunStart) == 1);
     REQUIRE(b.last(EventType::RunStart)->judged);
     REQUIRE_FALSE(b.last(EventType::RunStart)->clockUnknown);
@@ -149,7 +153,7 @@ TEST_CASE("A scheduled run starts at the window with headroom and walks the devi
     REQUIRE(b.last(EventType::DeviceEnd)->device == 0);
     REQUIRE(b.last(EventType::DeviceEnd)->outcome == Outcome::Pass);
     REQUIRE_THAT(b.last(EventType::DeviceEnd)->response, WithinAbs(1.5, 0.15));
-    REQUIRE(o.deviceOn == std::array<bool, 6>{});
+    REQUIRE(o.deviceOn == std::array<bool, reefdo::DEVICES>{});
     o = b.RunFor(120); // settle → device 1 starts
     REQUIRE(o.deviceOn[1]);
     REQUIRE(b.Count(EventType::DeviceStart) == 2);
@@ -164,7 +168,7 @@ TEST_CASE("A scheduled run starts at the window with headroom and walks the devi
     REQUIRE(b.Count(EventType::DeviceEnd) == 3);
     REQUIRE(b.last(EventType::DeviceEnd)->outcome == Outcome::Pass);
     REQUIRE(b.Count(EventType::FailAlert) == 0);
-    REQUIRE(o.failed == std::array<bool, 6>{});
+    REQUIRE(o.failed == std::array<bool, reefdo::DEVICES>{});
     REQUIRE(b.st.p.lastRunDay == b.day);
     REQUIRE(b.st.p.lastOutcome[0] == Outcome::Pass);
 
@@ -175,7 +179,7 @@ TEST_CASE("A scheduled run starts at the window with headroom and walks the devi
     REQUIRE(b.Count(EventType::RunStart) == 2);
 }
 
-TEST_CASE("A device with no measurable response fails; a later pass clears the alert", "[service]")
+TEST_CASE("A device with no measurable response fails; a later pass clears the alert", "[selftest]")
 {
     Bench b;
     b.ResponsiveTank(-0.005f, -0.05f); // bubbler: 0.15 % over 300 s — below the 1 % it must show
@@ -203,7 +207,48 @@ TEST_CASE("A device with no measurable response fails; a later pass clears the a
     REQUIRE(b.Count(EventType::FailAlert) == 1);
 }
 
-TEST_CASE("The pre-run trend is subtracted from the response", "[service]")
+TEST_CASE("A miss that starts at or above no_fail_above_mgl is unchecked, not a FAIL; 0 turns that off", "[selftest]")
+{
+    const auto evening = [](float pDoMgl, float pLimit)
+    {
+        Bench b;
+        b.cfg.noFailAboveMgl = pLimit;
+        b.doMgl = pDoMgl;
+        b.ResponsiveTank(-0.005f, -0.05f); // the bubbler misses its 1 %, the strong pump passes
+        b.GotoTime(19, 30);
+        b.RunFor(1400);
+        return b;
+    };
+    const auto end = [](const Bench& pB, uint8_t pDevice)
+    {
+        const Event* found = nullptr;
+        for(const Event& e : pB.events)
+            if(e.type == EventType::DeviceEnd && e.device == pDevice) found = &e;
+        REQUIRE(found != nullptr);
+        return *found;
+    };
+
+    const Bench high = evening(6.4f, 6.1f);
+    REQUIRE(end(high, 0).outcome == Outcome::Unchecked);
+    REQUIRE(end(high, 0).highDo);
+    REQUIRE_THAT(end(high, 0).doMgl, WithinAbs(6.4, 1e-6));
+    REQUIRE(end(high, 2).outcome == Outcome::Pass); // a pass up there is still a pass
+    REQUIRE_FALSE(end(high, 2).highDo);
+    REQUIRE(high.Count(EventType::FailAlert) == 0);
+    REQUIRE_FALSE(high.st.p.failActive[0]);
+    REQUIRE(high.st.p.lastOutcome[0] == Outcome::Unchecked);
+
+    const Bench low = evening(6.0f, 6.1f); // below the limit the same miss fails
+    REQUIRE(end(low, 0).outcome == Outcome::Fail);
+    REQUIRE_FALSE(end(low, 0).highDo);
+    REQUIRE(low.st.p.failActive[0]);
+
+    const Bench off = evening(6.4f, 0.0f); // 0 = the rule is off
+    REQUIRE(end(off, 0).outcome == Outcome::Fail);
+    REQUIRE(off.Count(EventType::FailAlert) == 1);
+}
+
+TEST_CASE("The pre-run trend is subtracted from the response", "[selftest]")
 {
     Bench b;
     b.tank = [&b](const Output&) { b.sat -= 0.01f; }; // falling 0.6 %/10 min all evening, devices do nothing
@@ -214,7 +259,8 @@ TEST_CASE("The pre-run trend is subtracted from the response", "[service]")
     REQUIRE(e->response < 0.2f); // the drift alone would have read ~0.36 % over run + tail
 }
 
-TEST_CASE("No headroom: the run waits, then starts at the latest fitting time and comes back inconclusive", "[service]")
+TEST_CASE("No headroom: the run waits, then starts at the latest fitting time and comes back inconclusive",
+          "[selftest]")
 {
     Bench b;
     b.sat = 100.5f; // 0.5 % from saturation: nothing to measure
@@ -244,7 +290,7 @@ TEST_CASE("No headroom: the run waits, then starts at the latest fitting time an
     }
 }
 
-TEST_CASE("Five inconclusive evenings raise the alert once; a judged run resets it", "[service]")
+TEST_CASE("Five inconclusive evenings raise the alert once; a judged run resets it", "[selftest]")
 {
     Bench b;
     b.sat = 100.5f;
@@ -268,7 +314,7 @@ TEST_CASE("Five inconclusive evenings raise the alert once; a judged run resets 
     REQUIRE_FALSE(b.Tick().inconclusiveAlert);
 }
 
-TEST_CASE("A window that passes without an attempt is logged as missed, once", "[service]")
+TEST_CASE("A window that passes without an attempt is logged as missed, once", "[selftest]")
 {
     Bench b;
     b.GotoTime(21, 5); // jump past the window with nothing having run (clock was 'unknown' until now)
@@ -286,7 +332,7 @@ TEST_CASE("A window that passes without an attempt is logged as missed, once", "
     REQUIRE(c.Count(EventType::RunStart) == 0);
 }
 
-TEST_CASE("Skips: not Normal, FAULT, maintenance, nothing to run", "[service]")
+TEST_CASE("Skips: not Normal, FAULT, maintenance, nothing to run", "[selftest]")
 {
     SECTION("Blue at the window: skipped, and not retried that day")
     {
@@ -323,7 +369,7 @@ TEST_CASE("Skips: not Normal, FAULT, maintenance, nothing to run", "[service]")
     }
 }
 
-TEST_CASE("Run now starts at any time and does not count as the day's scheduled run", "[service]")
+TEST_CASE("Run now starts at any time and does not count as the day's scheduled run", "[selftest]")
 {
     Bench b;
     b.sat = 110.0f;
@@ -340,7 +386,7 @@ TEST_CASE("Run now starts at any time and does not count as the day's scheduled 
     REQUIRE(b.Count(EventType::RunStart) == 2);
 }
 
-TEST_CASE("An alarm absorbs the run: inconclusive device, aborted run, demands cleared", "[service]")
+TEST_CASE("An alarm absorbs the run: inconclusive device, aborted run, demands cleared", "[selftest]")
 {
     Bench b;
     b.ResponsiveTank();
@@ -350,7 +396,7 @@ TEST_CASE("An alarm absorbs the run: inconclusive device, aborted run, demands c
     b.level = Level::Blue;
     Output o = b.Tick();
     REQUIRE_FALSE(o.running);
-    REQUIRE(o.deviceOn == std::array<bool, 6>{});
+    REQUIRE(o.deviceOn == std::array<bool, reefdo::DEVICES>{});
     REQUIRE(b.last(EventType::DeviceEnd)->outcome == Outcome::Inconclusive);
     REQUIRE(b.last(EventType::RunEnd)->aborted);
     REQUIRE(b.Count(EventType::DeviceEnd) == 1);
@@ -370,7 +416,7 @@ TEST_CASE("An alarm absorbs the run: inconclusive device, aborted run, demands c
     }
 }
 
-TEST_CASE("Maintenance entered mid-run lets the run finish", "[service]")
+TEST_CASE("Maintenance entered mid-run lets the run finish", "[selftest]")
 {
     Bench b;
     b.ResponsiveTank();
@@ -382,7 +428,7 @@ TEST_CASE("Maintenance entered mid-run lets the run finish", "[service]")
     REQUIRE_FALSE(b.last(EventType::RunEnd)->aborted);
 }
 
-TEST_CASE("Unknown clock: 24 h after the previous run, flagged; never without one", "[service]")
+TEST_CASE("Unknown clock: 24 h after the previous run, flagged; never without one", "[selftest]")
 {
     Bench b;
     b.clockKnown = false;
@@ -402,7 +448,7 @@ TEST_CASE("Unknown clock: 24 h after the previous run, flagged; never without on
     REQUIRE(c.last(EventType::RunStart)->clockUnknown);
 }
 
-TEST_CASE("Induced deficit cuts the configured device first; an abort during it ends the run cleanly", "[service]")
+TEST_CASE("Induced deficit cuts the configured device first; an abort during it ends the run cleanly", "[selftest]")
 {
     Bench b;
     b.cfg.induceDeficitS = 120;
@@ -412,7 +458,7 @@ TEST_CASE("Induced deficit cuts the configured device first; an abort during it 
     Output o = b.Tick();
     REQUIRE(o.running);
     REQUIRE(o.cutDevice == uint8_t{4});
-    REQUIRE(o.deviceOn == std::array<bool, 6>{});
+    REQUIRE(o.deviceOn == std::array<bool, reefdo::DEVICES>{});
     REQUIRE(b.Count(EventType::RunStart) == 0); // the run proper starts after the deficit
     o = b.RunFor(100);
     REQUIRE(o.cutDevice.has_value());
@@ -432,7 +478,7 @@ TEST_CASE("Induced deficit cuts the configured device first; an abort during it 
     REQUIRE(c.last(EventType::RunEnd)->aborted);
 }
 
-TEST_CASE("A probe dropout at device start makes that device inconclusive", "[service]")
+TEST_CASE("A probe dropout at device start makes that device inconclusive", "[selftest]")
 {
     Bench b;
     b.ResponsiveTank();
@@ -457,7 +503,7 @@ TEST_CASE("A probe dropout at device start makes that device inconclusive", "[se
     REQUIRE(c.Count(EventType::RunEnd) == 1);
 }
 
-TEST_CASE("Persistent state survives a reboot: no second run today, fail flags kept", "[service]")
+TEST_CASE("Persistent state survives a reboot: no second run today, fail flags kept", "[selftest]")
 {
     Bench b;
     b.ResponsiveTank(-0.005f, -0.05f);
@@ -474,7 +520,7 @@ TEST_CASE("Persistent state survives a reboot: no second run today, fail flags k
     REQUIRE(after.Count(EventType::RunStart) == 0);
 }
 
-TEST_CASE("Service invariants on random evenings", "[service][property]")
+TEST_CASE("Test invariants on random evenings", "[selftest][property]")
 {
     proptest::Forall(150,
                      [](proptest::Rng& pRng)
@@ -482,7 +528,7 @@ TEST_CASE("Service invariants on random evenings", "[service][property]")
                          Bench b;
                          for(auto& d : b.cfg.devices)
                          {
-                             d.serviceS = pRng.Coin(0.6) ? 60 + pRng.Below(4) * 60 : 0;
+                             d.testS = pRng.Coin(0.6) ? 60 + pRng.Below(4) * 60 : 0;
                              d.minResponsePct = pRng.Coin() ? 1.0f : 0.0f;
                          }
                          b.cfg.settleS = pRng.Below(3) * 30;
@@ -517,7 +563,7 @@ TEST_CASE("Service invariants on random evenings", "[service][property]")
                                  if(o.deviceOn[i])
                                  {
                                      ++on;
-                                     REQUIRE(b.cfg.devices[i].serviceS > 0);
+                                     REQUIRE(b.cfg.devices[i].testS > 0);
                                  }
                              }
                              REQUIRE(on <= 1);
@@ -536,15 +582,15 @@ TEST_CASE("Service invariants on random evenings", "[service][property]")
 }
 
 TEST_CASE("Defensive branches: out-of-range deficit device, a run longer than its window, manual skip with no clock",
-          "[service]")
+          "[selftest]")
 {
     Config c = ExampleCfg();
     c.induceDeficitS = 60;
-    c.induceDeficitDevice = 7;
-    REQUIRE(RunDurationS(c) == 1320); // 7 is not a device: no deficit phase
+    c.induceDeficitDevice = static_cast<uint32_t>(reefdo::DEVICES + 1);
+    REQUIRE(RunDurationS(c) == 1320); // not a device: no deficit phase
 
     Bench b; // three 3600 s runs cannot fit 19:30–21:00: the latest start clamps to the window start
-    b.cfg.devices[0].serviceS = b.cfg.devices[1].serviceS = b.cfg.devices[2].serviceS = 3600;
+    b.cfg.devices[0].testS = b.cfg.devices[1].testS = b.cfg.devices[2].testS = 3600;
     b.sat = 100.2f; // no headroom, yet it must start at 19:30
     b.GotoTime(19, 30);
     REQUIRE(b.Count(EventType::RunStart) == 1);
@@ -555,4 +601,74 @@ TEST_CASE("Defensive branches: out-of-range deficit device, a run longer than it
     m.Tick(true);
     REQUIRE(m.last(EventType::Skipped)->skip == Skip::Fault);
     REQUIRE_FALSE(m.st.attemptedDay.has_value());
+}
+
+TEST_CASE("Without exclusive mode the devices are exercised on time but nothing is measured or judged",
+          "[selftest][exclusive]")
+{
+    Bench b;
+    b.cfg.exclusive = false;
+    b.cfg.induceDeficitS = 120; // inert: the deficit exists only to be measured
+    b.cfg.induceDeficitDevice = 5;
+    b.cfg.inconclusiveDays = 1;
+    REQUIRE(RunDurationS(b.cfg) == 3 * 300 + 3 * 60 + 2 * 120);
+    b.sat = 100.0f; // no headroom: an exclusive run would wait for it
+    b.GotoTime(19, 30);
+    Output o = b.Tick();
+    REQUIRE(o.running);
+    REQUIRE_FALSE(o.cutDevice.has_value());
+    REQUIRE(o.deviceOn[0]);
+    REQUIRE_FALSE(b.last(EventType::RunStart)->judged);
+    b.RunFor(1400);
+    REQUIRE(b.Count(EventType::RunEnd) == 1);
+    REQUIRE(b.Count(EventType::DeviceEnd) == 3);
+    for(const Event& e : b.events)
+    {
+        if(e.type == EventType::DeviceEnd) REQUIRE(e.outcome == Outcome::Unchecked);
+    }
+    REQUIRE(b.Count(EventType::InconclusiveAlert) == 0);
+    REQUIRE(b.st.p.inconclusiveStreak == 0);
+}
+
+TEST_CASE("Switching exclusive mode off forgets standing verdicts, once", "[selftest][exclusive]")
+{
+    Bench b;
+    b.st.p.failActive[0] = true;
+    b.st.p.failActive[2] = true;
+    b.st.p.inconclusiveStreak = 5;
+    b.st.p.inconclusiveAlert = true;
+    Output o = b.Tick();
+    REQUIRE(o.failed[0]); // still exclusive: kept
+    b.cfg.exclusive = false;
+    o = b.Tick();
+    REQUIRE(o.failed == std::array<bool, reefdo::DEVICES>{});
+    REQUIRE_FALSE(o.inconclusiveAlert);
+    REQUIRE(b.Count(EventType::FailCleared) == 2);
+    REQUIRE(o.events[0].device == 0);
+    REQUIRE(o.events[1].device == 2);
+    o = b.Tick();
+    REQUIRE(o.events.empty());
+}
+
+TEST_CASE("A tested device out of order ends a run unjudged, or skips it; an untested one does not matter",
+          "[selftest][device_maintenance]")
+{
+    Bench b;
+    b.ResponsiveTank();
+    b.deviceOut[5] = true; // not exercised by the test
+    b.GotoTime(19, 30);
+    b.RunFor(100);
+    REQUIRE(b.st.phase == Phase::Running);
+    b.deviceOut[2] = true; // exercised later tonight
+    const Output o = b.Tick();
+    REQUIRE_FALSE(o.running);
+    REQUIRE(b.last(EventType::RunEnd)->aborted);
+    REQUIRE(b.last(EventType::DeviceEnd)->outcome == Outcome::Inconclusive);
+    REQUIRE_FALSE(b.st.p.failActive[0]);
+
+    Bench c;
+    c.deviceOut[0] = true;
+    c.GotoTime(19, 30);
+    REQUIRE(c.Count(EventType::RunStart) == 0);
+    REQUIRE(c.last(EventType::Skipped)->skip == Skip::DeviceOut);
 }

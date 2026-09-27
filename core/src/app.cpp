@@ -19,6 +19,22 @@ uint32_t Max3(uint32_t pA, uint32_t pB, uint32_t pC)
     return ab > pC ? ab : pC;
 }
 
+bool InWindows(const FixedVector<config::TimeWindow, config::WINDOWS>& pWindows, uint16_t pMinute)
+{
+    for(const config::TimeWindow& w : pWindows)
+    {
+        if(w.Contains(pMinute)) return true;
+    }
+    return false;
+}
+
+// Whole seconds left, rounded up; the caller has already ended anything at or past its time.
+uint32_t LeftS(const std::optional<uint64_t>& pUntilMs, uint64_t pNowMs)
+{
+    if(!pUntilMs.has_value()) return 0;
+    return static_cast<uint32_t>((*pUntilMs - pNowMs + 999u) / 1000u);
+}
+
 uint32_t LastSeq(const log::RecordLog& pL)
 {
     const std::optional<log::Record> r = pL.last();
@@ -35,26 +51,18 @@ App::App(const config::Config& pCfg, probe::IProbe& pProbe, Stores pStores)
     , mLogE(pStores.e)
     , mLogD(pStores.d)
 {
-    ApplyConfig();
+    ResetLinks(nullptr);
 }
 
-void App::ApplyConfig()
+void App::ResetLinks(const std::array<slot::AnySlot, DEVICES>* pOld)
 {
-    mLadderCfg = mCfg.ladder;
-    mServiceCfg = service::Config{};
-    mServiceCfg.windowStartMin = mCfg.service.windowStartMin;
-    mServiceCfg.windowEndMin = mCfg.service.windowEndMin;
-    mServiceCfg.settleS = mCfg.service.settleS;
-    mServiceCfg.tailS = mCfg.service.tailS;
-    mServiceCfg.minHeadroomPct = mCfg.service.minHeadroomPct;
-    mServiceCfg.inconclusiveDays = mCfg.service.inconclusiveDays;
-    mServiceCfg.chirp = mCfg.service.chirp;
-    mServiceCfg.induceDeficitS = mCfg.service.induceDeficitS;
-    mServiceCfg.induceDeficitDevice = mCfg.service.induceDeficitDevice;
     for(std::size_t i = 0; i < DEVICES; ++i)
     {
-        mServiceCfg.devices[i].serviceS = mCfg.devices[i].serviceS;
-        mServiceCfg.devices[i].minResponsePct = mCfg.devices[i].minResponsePct;
+        const slot::AnySlot& s = mCfg.devices[i].slot;
+        if(pOld != nullptr && (*pOld)[i] == s) continue;
+        mStatus.tuyaLink[i] = s.AsTuya() != nullptr ? Link::Pending : Link::None;
+        mStatus.tuyaError[i] = tuya::Error::None;
+        mTuyaFails[i] = 0;
     }
 }
 
@@ -63,13 +71,13 @@ uint32_t App::UptimeS(const Clock& pClock) const
     return static_cast<uint32_t>((pClock.nowMs - mBootMs) / 1000u);
 }
 
-std::optional<service::LocalTime> App::Local(const Clock& pClock) const
+std::optional<selftest::LocalTime> App::Local(const Clock& pClock) const
 {
     if(!pClock.unixS.has_value()) return std::nullopt;
     const int64_t l = static_cast<int64_t>(*pClock.unixS) + pClock.tzOffsetS;
     const int64_t day = l / 86400;
     const int64_t sec = l - day * 86400;
-    return service::LocalTime{static_cast<uint16_t>(sec / 60), static_cast<uint32_t>(day)};
+    return selftest::LocalTime{static_cast<uint16_t>(sec / 60), static_cast<uint32_t>(day)};
 }
 
 void App::Write(log::Record& pR, bool pAlsoEvents)
@@ -115,9 +123,9 @@ void App::Notify(Notification pN)
     mNotifications.push_back(pN);
 }
 
-FixedVector<Notification, 8> App::TakeNotifications()
+Notifications App::TakeNotifications()
 {
-    FixedVector<Notification, 8> out = mNotifications;
+    Notifications out = mNotifications;
     mNotifications.clear();
     return out;
 }
@@ -208,31 +216,34 @@ void App::LogBoostEvents(const Clock& pClock, const boost::Output& pOut)
     }
 }
 
-void App::LogServiceEvents(const Clock& pClock, const service::Output& pOut)
+void App::LogTestEvents(const Clock& pClock, const selftest::Output& pOut)
 {
-    for(const service::Event& e : pOut.events)
+    for(const selftest::Event& e : pOut.events)
     {
         log::Record r;
         r.ts = pClock.unixS.value_or(0);
         r.uptimeS = UptimeS(pClock);
-        r.type = log::Type::Service;
+        r.type = log::Type::Test;
         r.level = static_cast<uint8_t>(mStatus.effective);
-        r.flags = static_cast<uint16_t>((e.judged ? 1 : 0) | (e.clockUnknown ? 2 : 0) | (e.aborted ? 4 : 0));
+        r.flags = static_cast<uint16_t>((e.judged ? 1 : 0) | (e.clockUnknown ? 2 : 0) | (e.aborted ? 4 : 0) |
+                                        (e.highDo ? 8 : 0));
         r.aux = static_cast<uint32_t>(e.type) | (static_cast<uint32_t>(e.device) << 8) |
                 (static_cast<uint32_t>(e.outcome) << 16) | (static_cast<uint32_t>(e.skip) << 24);
         r.f0 = e.response;
+        r.f1 = e.doMgl;
+        r.f2 = e.highDo ? mCfg.test.noFailAboveMgl : 0.0f;
         Write(r, true);
         ++mDaily.events;
-        if(e.type == service::EventType::FailAlert)
+        if(e.type == selftest::EventType::FailAlert)
         {
-            Notification n{NotifyKind::ServiceFail};
+            Notification n{NotifyKind::TestFail};
             n.device = e.device;
             n.value = e.response;
             Notify(n);
         }
-        else if(e.type == service::EventType::InconclusiveAlert)
+        else if(e.type == selftest::EventType::InconclusiveAlert)
         {
-            Notify(Notification{NotifyKind::ServiceInconclusive});
+            Notify(Notification{NotifyKind::TestInconclusive});
         }
     }
 }
@@ -262,7 +273,7 @@ void App::Aggregate(const Clock& pClock, const probe::Reading& pR, float pDoC, L
     mAggregator.Add(pDoC, pR.satPct, pR.tempC, static_cast<uint8_t>(pEff));
 }
 
-void App::DailyRollover(const Clock& pClock, const std::optional<service::LocalTime>& pLt)
+void App::DailyRollover(const Clock& pClock, const std::optional<selftest::LocalTime>& pLt)
 {
     if(!pLt.has_value()) return;
     if(mDailyDay.has_value() && pLt->dayIndex != *mDailyDay && mDaily.samples > 0)
@@ -288,7 +299,11 @@ void App::DailyRollover(const Clock& pClock, const std::optional<service::LocalT
 
 void App::Tick(const Clock& pClock)
 {
-    const std::optional<service::LocalTime> lt = Local(pClock);
+    const std::optional<selftest::LocalTime> lt = Local(pClock);
+    for(std::size_t i = 0; i < DEVICES; ++i)
+        Expire(i, pClock);
+    if(mMaintenanceUntilMs.has_value() && pClock.nowMs >= *mMaintenanceUntilMs) EndMaintenance(pClock, 1);
+    mStatus.maintenanceLeftS = LeftS(mMaintenanceUntilMs, pClock.nowMs);
     TimeSync(pClock);
     DailyRollover(pClock, lt);
     mStatus.clockKnown = lt.has_value();
@@ -318,6 +333,7 @@ void App::Tick(const Clock& pClock)
     mStatus.slopeMglPer10min = mSlopeDo.SlopePer10min();
 
     // 2. Ladder
+    const Level wasEffective = mStatus.effective;
     ladder::Input li;
     li.doMgl = pr.status == probe::Status::Stuck ? std::nullopt : doMed; // a frozen value is not a reading
     li.slopeMglPer10min = mStatus.slopeMglPer10min;
@@ -326,53 +342,62 @@ void App::Tick(const Clock& pClock)
     if(lt.has_value()) li.minuteOfDay = lt->minuteOfDay;
     li.ackPressed = mAckPending;
     li.maintenance = mStatus.maintenance;
-    li.deviceFailed = mService.p.failActive;
+    li.deviceFailed = mTest.p.failActive;
     mAckPending = false;
-    const ladder::Output lo = ladder::Step(mLadder, li, mLadderCfg);
+    const ladder::Output lo = ladder::Step(mLadder, li, mCfg.ladder);
     mStatus.level = lo.level;
     mStatus.effective = lo.effective;
     mStatus.fault = lo.fault;
     mStatus.silenced = lo.silenced;
     mStatus.heat = lo.heat;
-    mStatus.buzzer = lo.buzzer;
-    mStatus.led = lo.led;
+    mStatus.sound = lo.sound;
 
-    // 3. Service
-    service::Input si;
+    // 3. Self test
+    selftest::Input si;
     si.nowMs = pClock.nowMs;
     si.local = lt;
     si.satPct = satMed;
+    si.doMgl = doMed;
     si.level = lo.level;
     si.fault = lo.fault;
     si.maintenance = mStatus.maintenance;
-    si.runNow = mRunServicePending;
-    mRunServicePending = false;
-    const service::Output so = service::Step(mService, si, mServiceCfg);
-    mStatus.serviceRunning = so.running;
-    mStatus.servicePhase = mService.phase;
-    mStatus.serviceDevice = static_cast<uint8_t>(mService.device);
+    for(std::size_t i = 0; i < DEVICES; ++i)
+        si.deviceOut[i] = mSuspendUntilMs[i].has_value();
+    const bool wasTesting = mStatus.testRunning;
+    si.runNow = mRunTestPending;
+    mRunTestPending = false;
+    const selftest::Output so = selftest::Step(mTest, si, mCfg.test);
+    mStatus.testRunning = so.running;
+    mStatus.testPhase = mTest.phase;
+    mStatus.testDevice = static_cast<uint8_t>(mTest.device);
     mStatus.deviceFailed = so.failed;
     mStatus.inconclusiveAlert = so.inconclusiveAlert;
     mStatus.chirp = so.chirp; // runs start only at Normal, where the buzzer is silent
 
-    // 3b. Boost: yields to a service run and to maintenance
+    // 3b. Boost: yields to a test run and to maintenance
     boost::Input bi;
     bi.local = lt;
     bi.doMgl = li.doMgl; // a stuck reading is no reading here either
-    bi.serviceRunning = so.running;
+    bi.testRunning = so.running;
     bi.maintenance = mStatus.maintenance;
     const boost::Output bo = boost::Step(mBoost, bi, mCfg.boost);
     mStatus.boostRunning = bo.running;
 
-    // 4. Merge device demands; apply polarity
+    // 4. Merge device demands: any one keeps a device on. An exclusive test run holds the windows off.
+    // A manual switch lasts until the next scheduled or triggered change, and an exclusive test starts clean.
+    const bool holdOff = mCfg.test.exclusive && so.running;
+    const bool testStarts = holdOff && !wasTesting;
+    const bool levelChanged = lo.effective != wasEffective;
     for(std::size_t i = 0; i < DEVICES; ++i)
     {
-        bool on = lo.deviceOn[i] || so.deviceOn[i] || bo.deviceOn[i];
-        if(so.cutDevice.has_value() && *so.cutDevice == i) on = false;
-        mAutoOn[i] = on;
-        if(mStatus.maintenance && mOverride[i].has_value()) on = *mOverride[i] || on; // automatic demands win
-        mStatus.deviceOn[i] = on;
-        mStatus.relayEnergised[i] = mCfg.devices[i].wiredNc ? !on : on;
+        const bool window = !holdOff && lt.has_value() && InWindows(mCfg.devices[i].windows, lt->minuteOfDay);
+        uint8_t why = static_cast<uint8_t>((lo.deviceOn[i] ? DEMAND_LADDER : 0) | (so.deviceOn[i] ? DEMAND_TEST : 0) |
+                                           (bo.deviceOn[i] ? DEMAND_BOOST : 0) | (window ? DEMAND_WINDOW : 0));
+        if(so.cutDevice.has_value() && *so.cutDevice == i) why = 0;
+        if(mManual[i].has_value() && testStarts) EndManual(i, pClock, 2);
+        if(mManual[i].has_value() && (why != mAutoWhy[i] || levelChanged)) EndManual(i, pClock, 1);
+        mAutoWhy[i] = why;
+        Resolve(i, pClock);
     }
 
     // 5. Log
@@ -384,10 +409,10 @@ void App::Tick(const Clock& pClock)
         r.uptimeS = mStatus.uptimeS;
         r.type = log::Type::Measurement;
         r.level = static_cast<uint8_t>(lo.effective);
-        r.flags = static_cast<uint16_t>((pr.status == probe::Status::Stuck ? FLAG_STUCK : 0) |
-                                        (mStatus.maintenance ? FLAG_MAINTENANCE : 0) |
-                                        (lo.silenced ? FLAG_SILENCED : 0) | (so.running ? FLAG_SERVICE_RUNNING : 0) |
-                                        (lo.heat ? FLAG_HEAT : 0) | (lt.has_value() ? 0 : FLAG_CLOCK_UNKNOWN));
+        r.flags = static_cast<uint16_t>(
+            (pr.status == probe::Status::Stuck ? FLAG_STUCK : 0) | (mStatus.maintenance ? FLAG_MAINTENANCE : 0) |
+            (lo.silenced ? FLAG_SILENCED : 0) | (so.running ? FLAG_TEST_RUNNING : 0) | (lo.heat ? FLAG_HEAT : 0) |
+            (lt.has_value() ? 0 : FLAG_CLOCK_UNKNOWN) | (AnySuspended() ? FLAG_SUSPENDED : 0));
         r.f0 = *doMed;
         r.f1 = *satMed;
         r.f2 = pr.reading->tempC;
@@ -408,12 +433,12 @@ void App::Tick(const Clock& pClock)
         ++mDaily.samples;
     }
     LogLadderEvents(pClock, lo, doNow);
-    LogServiceEvents(pClock, so);
+    LogTestEvents(pClock, so);
     LogBoostEvents(pClock, bo);
     AlertRepeat(pClock);
 
-    // Correction parameters go into the log once a day, just before the service window opens.
-    if(lt.has_value() && lt->minuteOfDay + 1 == mServiceCfg.windowStartMin && mCorrectionLoggedDay != lt->dayIndex)
+    // Correction parameters go into the log once a day, just before the test window opens.
+    if(lt.has_value() && lt->minuteOfDay + 1 == mCfg.test.windowStartMin && mCorrectionLoggedDay != lt->dayIndex)
     {
         mCorrectionLoggedDay = lt->dayIndex;
         LogSimple(pClock, log::Type::Correction, 1, mCfg.correction.scale, mCfg.correction.offset);
@@ -428,39 +453,159 @@ void App::Ack()
 
 void App::SetMaintenance(bool pOn, const Clock& pClock)
 {
-    if(pOn == mStatus.maintenance) return;
-    mStatus.maintenance = pOn;
-    if(!pOn)
+    if(pOn)
     {
-        for(auto& o : mOverride)
-            o.reset();
+        if(!mStatus.maintenance) LogSimple(pClock, log::Type::Command, 1u, 0.0f, 0.0f); // a restart is not logged
+        mStatus.maintenance = true;
+        mMaintenanceUntilMs = pClock.nowMs + static_cast<uint64_t>(MAINTENANCE_S) * 1000u;
     }
-    LogSimple(pClock, log::Type::Command, pOn ? 1u : 2u, 0.0f, 0.0f);
+    else if(mStatus.maintenance)
+    {
+        EndMaintenance(pClock, 0);
+    }
+    mStatus.maintenanceLeftS = LeftS(mMaintenanceUntilMs, pClock.nowMs);
 }
 
-void App::RunService()
+void App::EndMaintenance(const Clock& pClock, uint32_t pWhy)
 {
-    mRunServicePending = true;
+    mStatus.maintenance = false;
+    mMaintenanceUntilMs.reset();
+    LogSimple(pClock, log::Type::Command, 2u, 0.0f, static_cast<float>(pWhy));
+}
+
+void App::RunTest()
+{
+    mRunTestPending = true;
 }
 
 bool App::SetConfig(const config::Config& pCfg, const Clock& pClock)
 {
     const bool correctionChanged = !(pCfg.correction == mCfg.correction);
+    std::array<slot::AnySlot, DEVICES> old; // not the whole config: this runs on the web server's small stack
+    for(std::size_t i = 0; i < DEVICES; ++i)
+        old[i] = mCfg.devices[i].slot;
     mCfg = pCfg;
-    ApplyConfig();
+    ResetLinks(&old);
+    UpdateRelays(); // a device may have moved to another relay, or to a plug
     LogSimple(pClock, log::Type::Config, mCfg.schema, 0.0f, 0.0f);
     if(correctionChanged) LogSimple(pClock, log::Type::Correction, 2, mCfg.correction.scale, mCfg.correction.offset);
     return true;
 }
 
-bool App::SetDeviceOverride(std::size_t pDevice, std::optional<bool> pOn)
+bool App::SuspendDevice(std::size_t pDevice, uint32_t pSeconds, const Clock& pClock)
 {
-    if(!mStatus.maintenance || pDevice >= DEVICES) return false;
-    mOverride[pDevice] = pOn;
-    // Takes effect now, not at the next sample: a relay test should click when the button is pressed.
-    const bool on = pOn.has_value() ? (*pOn || mAutoOn[pDevice]) : mAutoOn[pDevice];
-    mStatus.deviceOn[pDevice] = on;
-    mStatus.relayEnergised[pDevice] = mCfg.devices[pDevice].wiredNc ? !on : on;
+    if(pDevice >= DEVICES || pSeconds > SUSPEND_MAX_S) return false;
+    if(pSeconds == 0)
+    {
+        if(mSuspendUntilMs[pDevice].has_value()) EndSuspension(pDevice, pClock, 0);
+    }
+    else
+    {
+        mSuspendUntilMs[pDevice] = pClock.nowMs + static_cast<uint64_t>(pSeconds) * 1000u;
+        LogSimple(pClock, log::Type::Command, 4u | static_cast<uint32_t>(pDevice) << 8, static_cast<float>(pSeconds),
+                  0.0f);
+    }
+    Resolve(pDevice, pClock);
+    return true;
+}
+
+bool App::SetManual(std::size_t pDevice, std::optional<bool> pState, const Clock& pClock)
+{
+    if(pDevice >= DEVICES) return false;
+    if(pState.has_value() && mCfg.test.exclusive && mStatus.testRunning) return false; // the test owns the tank
+    if(!pState.has_value())
+    {
+        if(mManual[pDevice].has_value()) EndManual(pDevice, pClock, 0);
+    }
+    else if(mManual[pDevice] != pState)
+    {
+        mManual[pDevice] = pState;
+        LogSimple(pClock, log::Type::Command, (*pState ? 6u : 7u) | static_cast<uint32_t>(pDevice) << 8, 0.0f, 0.0f);
+    }
+    Resolve(pDevice, pClock);
+    return true;
+}
+
+void App::EndSuspension(std::size_t pI, const Clock& pClock, uint32_t pWhy)
+{
+    mSuspendUntilMs[pI].reset();
+    LogSimple(pClock, log::Type::Command, 5u | static_cast<uint32_t>(pI) << 8, 0.0f, static_cast<float>(pWhy));
+}
+
+void App::EndManual(std::size_t pI, const Clock& pClock, uint32_t pWhy)
+{
+    mManual[pI].reset();
+    LogSimple(pClock, log::Type::Command, 8u | static_cast<uint32_t>(pI) << 8, 0.0f, static_cast<float>(pWhy));
+}
+
+void App::Expire(std::size_t pI, const Clock& pClock)
+{
+    if(mSuspendUntilMs[pI].has_value() && pClock.nowMs >= *mSuspendUntilMs[pI]) EndSuspension(pI, pClock, 1);
+}
+
+bool App::AnySuspended() const
+{
+    for(const std::optional<uint64_t>& u : mSuspendUntilMs)
+    {
+        if(u.has_value()) return true;
+    }
+    return false;
+}
+
+void App::Resolve(std::size_t pI, const Clock& pClock)
+{
+    Expire(pI, pClock);
+    uint8_t why = mAutoWhy[pI];
+    if(mManual[pI].value_or(false)) why = static_cast<uint8_t>(why | DEMAND_MANUAL);
+    bool on = mManual[pI].value_or(why != 0); // switched off by hand: off until the next change, whatever wants it
+    if(mSuspendUntilMs[pI].has_value()) on = false; // out of order beats everything
+    mStatus.deviceWhy[pI] = why;
+    mStatus.suspendLeftS[pI] = LeftS(mSuspendUntilMs[pI], pClock.nowMs);
+    mStatus.manual[pI] = mManual[pI];
+    mStatus.deviceOn[pI] = on;
+    UpdateRelays(); // a plug is switched by the Tuya task from deviceOn
+}
+
+void App::UpdateRelays()
+{
+    mStatus.relayEnergised.fill(false);
+    for(std::size_t i = 0; i < DEVICES; ++i)
+    {
+        const slot::Relay* r = mCfg.devices[i].slot.AsRelay();
+        if(r == nullptr || r->channel - 1u >= RELAYS) continue; // channel 0 wraps out of range too
+        mStatus.relayEnergised[r->channel - 1] =
+            r->wiring == slot::Wiring::Nc ? !mStatus.deviceOn[i] : mStatus.deviceOn[i];
+    }
+}
+
+bool App::ReportTuya(std::size_t pDevice, tuya::Error pError, const Clock& pClock)
+{
+    if(pDevice >= DEVICES || mCfg.devices[pDevice].slot.AsTuya() == nullptr) return false;
+    mStatus.tuyaError[pDevice] = pError;
+    Notification n{NotifyKind::DeviceBack};
+    n.device = static_cast<uint8_t>(pDevice);
+    if(pError == tuya::Error::None)
+    {
+        mTuyaFails[pDevice] = 0;
+        if(mStatus.tuyaLink[pDevice] == Link::Lost)
+        {
+            LogSimple(pClock, log::Type::Command, 10u | static_cast<uint32_t>(pDevice) << 8, 0.0f, 0.0f);
+            Notify(n);
+        }
+        mStatus.tuyaLink[pDevice] = Link::Ok;
+        return true;
+    }
+    ++mTuyaFails[pDevice];
+    if(mTuyaFails[pDevice] >= TUYA_LOST_AFTER && mStatus.tuyaLink[pDevice] != Link::Lost)
+    {
+        mStatus.tuyaLink[pDevice] = Link::Lost;
+        LogSimple(pClock, log::Type::Command, 9u | static_cast<uint32_t>(pDevice) << 8, static_cast<float>(pError),
+                  0.0f);
+        n.kind = NotifyKind::DeviceLost;
+        n.urgent = true;
+        n.value = static_cast<float>(pError);
+        Notify(n);
+    }
     return true;
 }
 
@@ -472,10 +617,10 @@ probe::CalResult App::AirCalibrate(const Clock& pClock)
     return r;
 }
 
-bool App::ServicePersistentChanged()
+bool App::TestPersistentChanged()
 {
-    const bool changed = !(mService.p == mServiceSaved);
-    if(changed) mServiceSaved = mService.p;
+    const bool changed = !(mTest.p == mTestSaved);
+    if(changed) mTestSaved = mTest.p;
     return changed;
 }
 

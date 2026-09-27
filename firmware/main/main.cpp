@@ -8,6 +8,7 @@
 #include "net.hpp"
 #include "notify.hpp"
 #include "sampler.hpp"
+#include "tuya_link.hpp"
 #include "web.hpp"
 
 namespace
@@ -34,4 +35,5 @@ extern "C" void app_main()
     notify::Start();
     net::Start();
     web::Start();
+    tuya_link::Start(); // plugs are reached over Wi-Fi: an observer of the App like the rest
 }

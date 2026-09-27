@@ -35,12 +35,12 @@ const char* const TAG = "web";
 const char* const KEY_PASSWORD = "pw";
 const char* const DEFAULT_PASSWORD = "reefdo";
 const char* const USER = "reef";
-constexpr std::size_t BODY_MAX = 4096;
+constexpr std::size_t BODY_MAX = reefdo::config::DOC_MAX; // a whole config document
 
 httpd_handle_t sServer = nullptr;
 char sPassword[33] = {};
-char sBody[BODY_MAX + 1]; // request bodies (the httpd task only)
-char sJson[4096];         // responses
+char sBody[BODY_MAX + 1];          // request bodies (the httpd task only)
+char sJson[reefdo::api::JSON_MAX]; // responses
 
 // Streams CSV into chunked responses. Sends happen with the App unlocked, so a slow client never stalls the
 // sampler; the ring may rotate meanwhile, which can repeat or skip a few rows at a segment boundary.
@@ -204,12 +204,18 @@ esp_err_t GetStatus(httpd_req_t* pReq)
     return SendJson(pReq, n);
 }
 
-esp_err_t GetService(httpd_req_t* pReq)
+// The slot types' parameters as JSON Schema: the page builds each device's output editor from it.
+esp_err_t GetSlots(httpd_req_t* pReq)
+{
+    return SendJson(pReq, reefdo::config::SlotSchema(sJson));
+}
+
+esp_err_t GetTest(httpd_req_t* pReq)
 {
     std::size_t n = 0;
     {
         sampler::Guard guard;
-        n = reefdo::api::ServiceJson(sampler::App(), sJson);
+        n = reefdo::api::TestJson(sampler::App(), sJson);
     }
     return SendJson(pReq, n);
 }
@@ -399,7 +405,7 @@ esp_err_t PostMute(httpd_req_t* pReq)
     const bool ok = httpd_query_key_value(sBody, "muted", value, sizeof value) == ESP_OK;
     if(ok) indicator::SetMuted(std::atoi(value) != 0);
     const int n = std::snprintf(sJson, sizeof sJson, "{\"ok\":%s,\"muted\":%s}", ok ? "true" : "false",
-                               indicator::Muted() ? "true" : "false");
+                                indicator::Muted() ? "true" : "false");
     return SendJson(pReq, static_cast<std::size_t>(n));
 }
 
@@ -485,7 +491,8 @@ void Start()
     Add("/logo.svg", HTTP_GET, Logo);
     Add("/apple-touch-icon.png", HTTP_GET, TouchIcon);
     Add("/api/status", HTTP_GET, GetStatus);
-    Add("/api/service", HTTP_GET, GetService);
+    Add("/api/test", HTTP_GET, GetTest);
+    Add("/api/slots", HTTP_GET, GetSlots);
     Add("/api/auth", HTTP_GET, GetAuth);
     Add("/api/config", HTTP_GET, GetConfig);
     Add("/api/config", HTTP_PUT, PutConfig);

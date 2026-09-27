@@ -2,11 +2,14 @@
 
 #include <cstdio>
 #include <cstring>
+#include <iterator>
 
 #include <ArduinoJson.h>
 
 #include "reefdo/solubility.hpp"
 #include "reefdo/version.hpp"
+
+#include "slot_json.hpp"
 
 namespace reefdo::api
 {
@@ -16,13 +19,13 @@ using ladder::Level;
 namespace
 {
 
-constexpr const char* LEVEL_NAMES[] = {"normal", "blue", "yellow", "red"};
-constexpr const char* TRIGGER_NAMES[] = {"none", "blue", "yellow", "red", "heat"};
 constexpr const char* OUTCOME_NAMES[] = {"none", "pass", "fail", "inconclusive", "unchecked"};
 constexpr const char* PHASE_NAMES[] = {"idle", "deficit", "running", "tail", "settle"};
 constexpr const char* PROBE_NAMES[] = {"ok", "stuck", "timeout", "frame_error", "exception", "implausible"};
-constexpr const char* BUZZER_NAMES[] = {"off", "beep", "continuous", "fault"};
-constexpr const char* LED_NAMES[] = {"green", "blue", "yellow", "red", "purple", "cyan"};
+
+constexpr const char* LINK_NAMES[] = {"none", "pending", "ok", "lost"};
+constexpr const char* TUYA_ERRORS[] = {"none", "connect", "send", "timeout", "frame", "auth", "refused", "crypto"};
+constexpr const char* DEMAND_NAMES[] = {"ladder", "test", "boost", "window", "manual"}; // bit 0 up
 
 std::size_t Finish(JsonDocument& pDoc, std::span<char> pOut)
 {
@@ -45,6 +48,29 @@ void PutOptional(JsonObject pO, const char* pKey, std::optional<float> pV)
 bool Emit(ISink& pSink, std::span<const char> pBuf, std::size_t pN)
 {
     return pSink.Write(std::string_view(pBuf.data(), pN));
+}
+
+// {"device":1..DEVICES,...} → index; nullopt with the message set when the number is missing or out of range.
+std::optional<std::size_t> DeviceIndex(JsonVariantConst pO, Command& pCmd)
+{
+    const JsonVariantConst dev = pO["device"];
+    if(!dev.is<uint32_t>() || dev.as<uint32_t>() < 1 || dev.as<uint32_t>() > DEVICES)
+    {
+        pCmd.message = "no such device number";
+        return std::nullopt;
+    }
+    return dev.as<uint32_t>() - 1;
+}
+
+// {"device":n,"s":seconds} for suspend; nullopt with the message set when the field is unusable.
+std::optional<uint32_t> Seconds(JsonVariantConst pO, Command& pCmd)
+{
+    if(!pO["s"].is<uint32_t>())
+    {
+        pCmd.message = "s must be a number of seconds (0 ends it)";
+        return std::nullopt;
+    }
+    return pO["s"].as<uint32_t>();
 }
 
 // First tier-A index whose record lies at or after `from_ts`, scanning back from the newest (a chart asks for
@@ -92,14 +118,15 @@ std::size_t StatusJson(const app::App& pApp, const app::Clock& pClock, std::span
     corr["seawater_scale_hint"] = solubility::SeawaterScale(s.tempC.value_or(26.0f), c.salinityPsu);
 
     JsonObject lad = doc["ladder"].to<JsonObject>();
-    lad["level"] = LEVEL_NAMES[static_cast<uint8_t>(s.level)];
-    lad["effective"] = LEVEL_NAMES[static_cast<uint8_t>(s.effective)];
+    lad["level"] = config::Name(s.level);
+    lad["effective"] = config::Name(s.effective);
     lad["fault"] = s.fault;
     lad["silenced"] = s.silenced;
     lad["heat"] = s.heat;
     lad["maintenance"] = s.maintenance;
-    lad["buzzer"] = BUZZER_NAMES[static_cast<uint8_t>(s.buzzer)];
-    lad["led"] = LED_NAMES[static_cast<uint8_t>(s.led)];
+    lad["maintenance_s"] = s.maintenanceLeftS; // until it ends by itself; 0 when off
+    // What the buzzer plays now: the configured pattern of the state shown, when the ladder lets it sound.
+    lad["buzzer"] = s.sound ? config::Name(c.signals.of(s.effective, s.fault).buzzer) : "off";
     JsonObject th = lad["enters_below"].to<JsonObject>();
     th["blue"] = c.ladder.blue.mgl - c.ladder.blue.hysteresis;
     th["yellow"] = c.ladder.yellow.mgl - c.ladder.yellow.hysteresis;
@@ -110,28 +137,57 @@ std::size_t StatusJson(const app::App& pApp, const app::Clock& pClock, std::span
     lv["red"] = c.ladder.red.mgl + c.ladder.red.hysteresis;
 
     JsonArray devices = doc["devices"].to<JsonArray>();
-    for(std::size_t i = 0; i < app::DEVICES; ++i)
+    for(std::size_t i = 0; i < DEVICES; ++i)
     {
         JsonObject d = devices.add<JsonObject>();
         d["name"] = c.devices[i].name.view();
-        d["trigger"] = TRIGGER_NAMES[static_cast<uint8_t>(c.ladder.devices[i].trigger)];
-        d["wired"] = c.devices[i].wiredNc ? "NC" : "NO";
+        d["trigger"] = config::Name(c.ladder.devices[i].trigger);
+        config::PutSlot(d["slot"].to<JsonObject>(), c.devices[i].slot, true); // as in the config, the key masked
         d["pulse"] = c.ladder.devices[i].mode == ladder::Mode::PulseOff;
         d["on"] = s.deviceOn[i];
-        d["energised"] = s.relayEnergised[i];
+        const slot::Relay* relay = c.devices[i].slot.AsRelay();
+        d["energised"] = relay != nullptr && relay->channel - 1u < RELAYS && s.relayEnergised[relay->channel - 1];
         d["failed"] = s.deviceFailed[i];
-        d["service_s"] = c.devices[i].serviceS;
+        d["test_s"] = c.test.devices[i].testS;
+        d["suspend_s"] = s.suspendLeftS[i];
+        if(s.manual[i].has_value())
+        {
+            d["manual"] = *s.manual[i];
+        }
+        else
+        {
+            d["manual"] = nullptr; // automatic
+        }
+        if(s.tuyaLink[i] == app::Link::None)
+        {
+            d["link"] = nullptr; // not a plug
+        }
+        else
+        {
+            JsonObject t = d["link"].to<JsonObject>();
+            t["state"] = LINK_NAMES[static_cast<uint8_t>(s.tuyaLink[i])];
+            t["error"] = TUYA_ERRORS[static_cast<uint8_t>(s.tuyaError[i])];
+        }
+        JsonArray why = d["why"].to<JsonArray>();
+        for(std::size_t b = 0; b < std::size(DEMAND_NAMES); ++b)
+        {
+            if(s.deviceWhy[i] & (1u << b)) why.add(DEMAND_NAMES[b]);
+        }
     }
+    JsonArray relays = doc["relays"].to<JsonArray>(); // energised, per channel
+    for(const bool e : s.relayEnergised)
+        relays.add(e);
 
-    JsonObject svc = doc["service"].to<JsonObject>();
-    svc["running"] = s.serviceRunning;
-    svc["phase"] = PHASE_NAMES[static_cast<uint8_t>(s.servicePhase)];
-    svc["device"] = s.serviceDevice + 1;
+    JsonObject svc = doc["test"].to<JsonObject>();
+    svc["running"] = s.testRunning;
+    svc["phase"] = PHASE_NAMES[static_cast<uint8_t>(s.testPhase)];
+    svc["device"] = s.testDevice + 1;
     svc["inconclusive_alert"] = s.inconclusiveAlert;
+    svc["exclusive"] = c.test.exclusive;
     char hhmm[6];
-    config::FormatHhmm(c.service.windowStartMin, hhmm);
+    config::FormatHhmm(c.test.windowStartMin, hhmm);
     svc["window_start"] = std::string_view(hhmm);
-    config::FormatHhmm(c.service.windowEndMin, hhmm);
+    config::FormatHhmm(c.test.windowEndMin, hhmm);
     svc["window_end"] = std::string_view(hhmm);
 
     JsonObject bst = doc["boost"].to<JsonObject>();
@@ -152,34 +208,26 @@ std::size_t StatusJson(const app::App& pApp, const app::Clock& pClock, std::span
     return Finish(doc, pOut);
 }
 
-std::size_t ServiceJson(const app::App& pApp, std::span<char> pOut)
+std::size_t TestJson(const app::App& pApp, std::span<char> pOut)
 {
-    const service::State& st = pApp.ServiceState();
+    const selftest::State& st = pApp.TestState();
     const config::Config& c = pApp.GetConfig();
     JsonDocument doc;
-    doc["running"] = st.phase != service::Phase::Idle;
+    doc["running"] = st.phase != selftest::Phase::Idle;
     doc["phase"] = PHASE_NAMES[static_cast<uint8_t>(st.phase)];
     doc["inconclusive_streak"] = st.p.inconclusiveStreak;
     doc["inconclusive_alert"] = st.p.inconclusiveAlert;
     if(st.p.lastRunDay.has_value()) doc["last_run_day"] = *st.p.lastRunDay;
-    service::Config sc;
-    for(std::size_t i = 0; i < app::DEVICES; ++i)
-    {
-        sc.devices[i].serviceS = c.devices[i].serviceS;
-        sc.devices[i].minResponsePct = c.devices[i].minResponsePct;
-    }
-    sc.settleS = c.service.settleS;
-    sc.tailS = c.service.tailS;
-    sc.induceDeficitS = c.service.induceDeficitS;
-    sc.induceDeficitDevice = c.service.induceDeficitDevice;
-    doc["run_duration_s"] = service::RunDurationS(sc);
+    doc["exclusive"] = c.test.exclusive;
+    doc["no_fail_above_mgl"] = c.test.noFailAboveMgl;
+    doc["run_duration_s"] = selftest::RunDurationS(c.test);
     JsonArray devices = doc["devices"].to<JsonArray>();
-    for(std::size_t i = 0; i < app::DEVICES; ++i)
+    for(std::size_t i = 0; i < DEVICES; ++i)
     {
         JsonObject d = devices.add<JsonObject>();
         d["name"] = c.devices[i].name.view();
-        d["service_s"] = c.devices[i].serviceS;
-        d["min_response_pct"] = c.devices[i].minResponsePct;
+        d["test_s"] = c.test.devices[i].testS;
+        d["min_response_pct"] = c.test.devices[i].minResponsePct;
         d["last_outcome"] = OUTCOME_NAMES[static_cast<uint8_t>(st.p.lastOutcome[i])];
         d["last_response"] = st.p.lastResponse[i];
         d["fail_active"] = st.p.failActive[i];
@@ -237,11 +285,11 @@ Command ApplyCommand(app::App& pApp, std::string_view pJson, const app::Clock& p
         cmd.message = "maintenance updated";
         return cmd;
     }
-    if(root["service"].is<const char*>() && std::strcmp(root["service"].as<const char*>(), "run") == 0)
+    if(root["test"].is<const char*>() && std::strcmp(root["test"].as<const char*>(), "run") == 0)
     {
-        pApp.RunService();
+        pApp.RunTest();
         cmd.ok = true;
-        cmd.message = "service run requested";
+        cmd.message = "test run requested";
         return cmd;
     }
     if(root["cal"].is<const char*>() && std::strcmp(root["cal"].as<const char*>(), "air") == 0)
@@ -253,19 +301,35 @@ Command ApplyCommand(app::App& pApp, std::string_view pJson, const app::Clock& p
                                                        : "the probe did not acknowledge";
         return cmd;
     }
-    const JsonVariantConst relay = root["relay"];
-    if(relay.is<JsonObjectConst>())
+
+    const JsonVariantConst suspend = root["suspend"];
+    if(suspend.is<JsonObjectConst>())
     {
-        const JsonVariantConst dev = relay["device"];
-        if(!dev.is<uint32_t>() || dev.as<uint32_t>() < 1 || dev.as<uint32_t>() > app::DEVICES)
+        const std::optional<std::size_t> dev = DeviceIndex(suspend, cmd);
+        if(!dev.has_value()) return cmd;
+        const std::optional<uint32_t> secs = Seconds(suspend, cmd);
+        if(!secs.has_value()) return cmd;
+        cmd.ok = pApp.SuspendDevice(*dev, *secs, pClock);
+        cmd.message = !cmd.ok ? "at most 7200 s" : *secs > 0 ? "device suspended" : "device resumed";
+        return cmd;
+    }
+    const JsonVariantConst manual = root["manual"];
+    if(manual.is<JsonObjectConst>())
+    {
+        const std::optional<std::size_t> dev = DeviceIndex(manual, cmd);
+        if(!dev.has_value()) return cmd;
+        const JsonVariantConst on = manual["on"];
+        if(!on.is<bool>() && !on.isNull())
         {
-            cmd.message = "device must be 1..6";
+            cmd.message = "on must be true, false or null (automatic)";
             return cmd;
         }
-        std::optional<bool> on;
-        if(relay["on"].is<bool>()) on = relay["on"].as<bool>();
-        cmd.ok = pApp.SetDeviceOverride(dev.as<uint32_t>() - 1, on);
-        cmd.message = cmd.ok ? "override set" : "maintenance mode required";
+        const std::optional<bool> state = on.isNull() ? std::nullopt : std::optional<bool>(on.as<bool>());
+        cmd.ok = pApp.SetManual(*dev, state, pClock);
+        cmd.message = !cmd.ok              ? "an exclusive test is running"
+                      : !state.has_value() ? "automatic"
+                      : *state             ? "manual on"
+                                           : "manual off";
         return cmd;
     }
     const JsonVariantConst time = root["time"];

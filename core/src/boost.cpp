@@ -42,7 +42,7 @@ Output Step(State& pS, const Input& pIn, const Config& pCfg)
             Stop(pS, out, EventType::WindowEnd, mgl);
             return out;
         }
-        if(pIn.serviceRunning || pIn.maintenance)
+        if(pIn.testRunning || pIn.maintenance)
         {
             Stop(pS, out, EventType::Paused, mgl); // doneDay untouched: resumes if the window is still open
             return out;
@@ -54,8 +54,7 @@ Output Step(State& pS, const Input& pIn, const Config& pCfg)
             return out;
         }
     }
-    else if(open && !pIn.serviceRunning && !pIn.maintenance && mgl < pCfg.targetMgl &&
-            pS.doneDay != pIn.local->dayIndex)
+    else if(open && !pIn.testRunning && !pIn.maintenance && mgl < pCfg.targetMgl && pS.doneDay != pIn.local->dayIndex)
     {
         pS.running = true;
         out.events.push_back({EventType::Start, mgl});

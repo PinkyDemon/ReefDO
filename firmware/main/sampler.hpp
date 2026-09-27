@@ -26,11 +26,10 @@ enum class ProbeSource : uint8_t
 struct Indication
 {
     reefdo::ladder::Level effective = reefdo::ladder::Level::Normal;
-    reefdo::ladder::Buzzer buzzer = reefdo::ladder::Buzzer::Off;
-    reefdo::ladder::Led led = reefdo::ladder::Led::Green;
+    bool sound = false; // the ladder lets the alarm sound
     bool fault = false;
     bool maintenance = false;
-    bool serviceRunning = false;
+    bool testRunning = false;
     bool anyFailed = false;
     uint32_t chirps = 0; // total so far; the indicator plays one per increment
     reefdo::config::SignalsConfig signals;
@@ -71,7 +70,7 @@ std::size_t ConfigJson(std::span<char> pOut);
 void SetTime(uint32_t pUnixS, std::optional<int32_t> pTzOffsetS);
 int32_t TzOffsetS();
 const char* ConfigState(); // "stored", "defaults", or "rejected at <path>: <message>" (the tank is then unprotected!)
-void ApplyRelays(); // after a command that changes device states (override, ack): do not wait for the next sample
+void ApplyRelays(); // after a command that changes device states (manual, suspend): do not wait for the next sample
 
 void Hang(); // stop feeding the task watchdog: proves the panic → reboot → relays-off path
 

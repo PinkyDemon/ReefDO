@@ -10,36 +10,35 @@
 
 #include "reefdo/boost.hpp"
 #include "reefdo/correction.hpp"
+#include "reefdo/devices.hpp"
 #include "reefdo/fixed_string.hpp"
+#include "reefdo/fixed_vector.hpp"
 #include "reefdo/ladder.hpp"
+#include "reefdo/slot.hpp"
 
 namespace reefdo::config
 {
 
-constexpr std::size_t DEVICES = ladder::DEVICES;
+constexpr std::size_t WINDOWS = 4;                    // always-on windows per device
+constexpr std::size_t DOC_MAX = 1024 + 512 * DEVICES; // bytes: the largest document Write() makes (tested)
 
-// Per-device settings the ladder does not need (its own part lives in ladder::Config::devices[i]).
+// A daily span of local time; an end before the start wraps midnight. Start == end is rejected by Validate().
+struct TimeWindow
+{
+    uint16_t startMin = 0;
+    uint16_t endMin = 0;
+    bool Contains(uint16_t pMinute) const;
+    bool operator==(const TimeWindow&) const = default;
+};
+
+// A device's own settings; what the ladder, the self test and the boost need of it lives in their configs
+// (ladder.devices[i], test.devices[i], boost.devices[i]).
 struct DeviceSettings
 {
     FixedString<24> name;
-    bool wiredNc = false;        // NC: on when the coil is de-energised = on when the controller is dead
-    uint32_t serviceS = 0;       // daily service run duration; 0 = not exercised
-    float minResponsePct = 0.0f; // saturation-% response the check demands; 0 = run but don't judge
+    slot::AnySlot slot;                       // what it switches: a relay, a plug or nothing; no two devices share one
+    FixedVector<TimeWindow, WINDOWS> windows; // always on inside these; one more demand, like the ladder's
     bool operator==(const DeviceSettings&) const = default;
-};
-
-struct ServiceConfig
-{
-    uint16_t windowStartMin = 19 * 60; // local minutes after midnight
-    uint16_t windowEndMin = 19 * 60 + 30;
-    uint32_t settleS = 120;
-    uint32_t tailS = 60;
-    float minHeadroomPct = 3.0f;
-    uint32_t inconclusiveDays = 5;
-    bool chirp = true;
-    uint32_t induceDeficitS = 0;      // 0 = off
-    uint32_t induceDeficitDevice = 0; // 1..6; only meaningful when induce_deficit_s > 0
-    bool operator==(const ServiceConfig&) const = default;
 };
 
 struct NtfyConfig
@@ -93,14 +92,20 @@ struct Config
     Correction correction;
     ladder::Config ladder;
     std::array<DeviceSettings, DEVICES> devices;
-    ServiceConfig service;
+    selftest::Config test;
     NtfyConfig ntfy;
     SignalsConfig signals;
     boost::Config boost;
     bool operator==(const Config&) const = default;
 };
 
-// Factory defaults: every device unassigned ("device N", NO, trigger none) — a fresh board switches nothing.
+// The names the JSON documents use for these enums.
+const char* Name(ladder::Level pL);
+const char* Name(ladder::Trigger pT);
+const char* Name(BuzzerPattern pP);
+
+// Factory defaults: device N on relay N (as far as there are relays), NO, trigger none — a fresh board switches
+// nothing.
 Config Defaults();
 
 enum class LoadError : uint8_t
@@ -126,7 +131,14 @@ LoadResult Load(std::string_view pJson, Config& pOut, const Config& pBase); // b
 LoadResult Validate(const Config& pCfg);
 
 // Serialise to JSON. Returns bytes written (no terminator), or 0 if it does not fit.
-std::size_t Write(const Config& pCfg, std::span<char> pOut);
+// pRedact: secret slot parameters (a plug's local key) come out as KEY_REDACTED (for anything a browser sees);
+// Load keeps the stored value when it reads the placeholder back.
+// when it reads that placeholder back.
+constexpr const char* KEY_REDACTED = "********";
+std::size_t Write(const Config& pCfg, std::span<char> pOut, bool pRedact = false);
+// Every slot type's parameters as JSON Schema, {"none": {...}, "relay": {...}, "tuya": {...}}: titles, help,
+// limits, defaults. The page builds a device's output editor from it. 0 if it does not fit.
+std::size_t SlotSchema(std::span<char> pOut);
 
 // "HH:MM" ↔ minutes after midnight.
 std::optional<uint16_t> ParseHhmm(std::string_view pS);

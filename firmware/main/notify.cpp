@@ -9,6 +9,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "tuya_link.hpp"
 
 namespace notify
 {
@@ -43,7 +44,9 @@ bool Format(const reefdo::app::Notification& pN, const reefdo::config::Config& p
     std::memset(&pM, 0, sizeof pM);
     std::strncpy(pM.topic, pCfg.ntfy.topic.c_str(), sizeof pM.topic - 1);
     std::strncpy(pM.priority, pN.urgent ? "high" : "default", sizeof pM.priority - 1);
-    const char* dev = pN.device >= 1 && pN.device <= 6 ? pCfg.devices[pN.device - 1].name.c_str() : "";
+    // Notification devices are indices (0-based), like everywhere in the App.
+    const char* dev = pN.device < reefdo::DEVICES ? pCfg.devices[pN.device].name.c_str() : "";
+    const unsigned num = static_cast<unsigned>(pN.device) + 1;
     switch(pN.kind)
     {
         case NotifyKind::Level:
@@ -66,17 +69,28 @@ bool Format(const reefdo::app::Notification& pN, const reefdo::config::Config& p
             std::snprintf(pM.body, sizeof pM.body, "DO %.2f mg/L", static_cast<double>(pN.value));
             std::strncpy(pM.tags, "white_check_mark", sizeof pM.tags - 1);
             break;
-        case NotifyKind::ServiceFail:
-            std::snprintf(pM.title, sizeof pM.title, "ReefDO service FAIL: %s", dev);
-            std::snprintf(pM.body, sizeof pM.body, "device %u responded %.1f %% — check it tonight", pN.device,
+        case NotifyKind::TestFail:
+            std::snprintf(pM.title, sizeof pM.title, "ReefDO test FAIL: %s", dev);
+            std::snprintf(pM.body, sizeof pM.body, "device %u responded %.1f %% — check it tonight", num,
                           static_cast<double>(pN.value));
             std::strncpy(pM.tags, "wrench", sizeof pM.tags - 1);
             break;
-        case NotifyKind::ServiceInconclusive:
-            std::strncpy(pM.title, "ReefDO service inconclusive", sizeof pM.title - 1);
+        case NotifyKind::TestInconclusive:
+            std::strncpy(pM.title, "ReefDO test inconclusive", sizeof pM.title - 1);
             std::snprintf(pM.body, sizeof pM.body, "%u evenings without a usable check",
                           static_cast<unsigned>(pN.value));
             std::strncpy(pM.tags, "question", sizeof pM.tags - 1);
+            break;
+        case NotifyKind::DeviceLost:
+            std::snprintf(pM.title, sizeof pM.title, "ReefDO plug lost: %s", dev);
+            std::snprintf(pM.body, sizeof pM.body, "device %u stopped answering (%s); it keeps its last state", num,
+                          tuya_link::ErrorName(static_cast<reefdo::tuya::Error>(static_cast<int>(pN.value))));
+            std::strncpy(pM.tags, "electric_plug,warning", sizeof pM.tags - 1);
+            break;
+        case NotifyKind::DeviceBack:
+            std::snprintf(pM.title, sizeof pM.title, "ReefDO plug back: %s", dev);
+            std::snprintf(pM.body, sizeof pM.body, "device %u answers again", num);
+            std::strncpy(pM.tags, "electric_plug", sizeof pM.tags - 1);
             break;
         case NotifyKind::Boot:
             std::strncpy(pM.title, "ReefDO booted", sizeof pM.title - 1);
