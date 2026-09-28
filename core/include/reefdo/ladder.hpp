@@ -33,6 +33,14 @@ enum class Mode : uint8_t
     On,
     PulseOff
 };
+// How an alarm behaves outside the night window (the night always sounds).
+enum class DayAlarm : uint8_t
+{
+    Sound,
+    AutoAck, // sounds DAY_ACK_AFTER_S, then acknowledged as if Ack were pressed
+    Suppress // silent, the alarm devices too; the level, its devices and the pushes are unchanged
+};
+constexpr uint32_t DAY_ACK_AFTER_S = 10;
 
 struct DeviceConfig
 {
@@ -56,7 +64,11 @@ struct Config
     LevelConfig yellow{5.2f, 0.15f, 60};
     LevelConfig red{4.5f, 0.20f, 0};
     float blueSlopeMglPer10min = 0.0f; // > 0 enables: a fall steeper than this also counts as Blue's entry condition
-    uint32_t recoverSustainS = 600;    // above the exit threshold this long → one level shallower
+    // > 0 enables: a fall steeper than this over the last 2 min is suspect (the probe, not the tank). Until the
+    // reading is back above every entry threshold, each level's dwell is suddenExtendS longer.
+    float suddenSlopeMglPer10min = 3.0f;
+    uint32_t suddenExtendS = 600;
+    uint32_t recoverSustainS = 600; // above the exit threshold this long → one level shallower
     uint32_t ackSilenceS = 1800;
     uint32_t faultConsecutiveFailures = 5;
     bool faultAlert = true;        // off: probe failures are logged and counted, but never raise FAULT
@@ -69,6 +81,7 @@ struct Config
     uint16_t nightStartMin = 21 * 60; // minutes after local midnight
     uint16_t nightEndMin = 8 * 60;
     bool unknownTimeIsNight = true;
+    DayAlarm dayAlarm = DayAlarm::Sound;
     std::array<DeviceConfig, DEVICES> devices{};
 
     const LevelConfig& GetLevel(Level pL) const; // Blue, Yellow or Red only
@@ -79,6 +92,7 @@ struct Input
 {
     std::optional<float> doMgl; // corrected mg/L (Correction::apply); nullopt: the probe failed this tick
     float slopeMglPer10min = 0.0f;
+    float fastSlopeMglPer10min = 0.0f; // over the last 2 min: sudden-drop detection
     std::optional<float> tempC;
     uint64_t nowMs = 0;                  // monotonic
     std::optional<uint16_t> minuteOfDay; // local time; nullopt until the clock is known
@@ -96,6 +110,9 @@ enum class EventType : uint8_t
     Pulse, // device pulsed off
     HeatOn,
     HeatOff,
+    AutoAck,     // day_alarm auto_ack
+    SuddenDrop,  // a suspect fall: dwells extended
+    SuddenClear, // back above every entry threshold: dwells normal again
 };
 
 struct Event
@@ -111,9 +128,11 @@ struct Output
     Level level = Level::Normal; // what the readings support; frozen while the probe fails
     bool fault = false;          // the probe failed: fault.level's devices run (if deeper), fault signal
     bool silenced = false;       // Ack in effect
+    bool suppressed = false;     // day_alarm suppress in effect
+    bool suspect = false;        // a sudden drop: dwells extended
     bool heat = false;
-    std::array<bool, DEVICES> deviceOn{};   // semantic "powered"; NO/NC polarity is applied by the caller
-    bool sound = false;                     // the alarm may sound: an alert or FAULT, not silenced, not in maintenance
+    std::array<bool, DEVICES> deviceOn{}; // semantic "powered"; NO/NC polarity is applied by the caller
+    bool sound = false; // the alarm may sound: an alert or FAULT, not silenced or suppressed, not in maintenance
     FixedVector<Event, DEVICES + 8> events; // a pulse per device at most, plus the level events
 };
 
@@ -133,6 +152,8 @@ struct State
     std::array<std::optional<uint64_t>, 3> belowSinceMs{}; // [Blue-1, Yellow-1, Red-1]
     std::optional<uint64_t> aboveSinceMs;
     std::optional<uint64_t> ackUntilMs;
+    std::optional<uint64_t> soundingSinceMs; // day auto_ack: the unacknowledged alarm sounds since
+    bool suspect = false;
     bool heat = false;
     bool nightArmed = false;
     std::array<PulseState, DEVICES> pulse{};

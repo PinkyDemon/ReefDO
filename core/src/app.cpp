@@ -161,6 +161,7 @@ void App::LogLadderEvents(const Clock& pClock, const ladder::Output& pOut, float
         r.flags = static_cast<uint16_t>(static_cast<uint8_t>(e.from) | (static_cast<uint8_t>(e.to) << 8));
         r.aux = static_cast<uint32_t>(e.type) | (static_cast<uint32_t>(e.device) << 8);
         r.f0 = pDoNow;
+        if(e.type == ladder::EventType::SuddenDrop) r.f1 = mStatus.fastSlopeMglPer10min;
         Write(r, true);
         ++mDaily.events;
 
@@ -324,6 +325,7 @@ void App::Tick(const Clock& pClock)
         doMed = mMedDo.Push(doC);
         satMed = mMedSat.Push(pr.reading->satPct);
         mSlopeDo.Push(pClock.nowMs, *doMed);
+        mFastSlopeDo.Push(pClock.nowMs, *doMed);
         mStatus.tempC = pr.reading->tempC;
     }
     if(pr.reading.has_value() && pr.status != probe::Status::Stuck)
@@ -333,6 +335,7 @@ void App::Tick(const Clock& pClock)
     mStatus.doMgl = doMed;
     mStatus.satPct = satMed;
     mStatus.slopeMglPer10min = mSlopeDo.SlopePer10min();
+    mStatus.fastSlopeMglPer10min = mFastSlopeDo.SlopePer10min();
 
     // 2. Ladder
     const Level wasLevel = mStatus.level;
@@ -340,6 +343,7 @@ void App::Tick(const Clock& pClock)
     ladder::Input li;
     li.doMgl = pr.status == probe::Status::Stuck ? std::nullopt : doMed; // a frozen value is not a reading
     li.slopeMglPer10min = mStatus.slopeMglPer10min;
+    li.fastSlopeMglPer10min = mStatus.fastSlopeMglPer10min;
     li.tempC = pr.reading.has_value() ? std::optional<float>(pr.reading->tempC) : std::nullopt;
     li.nowMs = pClock.nowMs;
     if(lt.has_value()) li.minuteOfDay = lt->minuteOfDay;
@@ -350,6 +354,8 @@ void App::Tick(const Clock& pClock)
     mStatus.level = lo.level;
     mStatus.fault = lo.fault;
     mStatus.silenced = lo.silenced;
+    mStatus.suppressed = lo.suppressed;
+    mStatus.suspect = lo.suspect;
     mStatus.heat = lo.heat;
     mStatus.sound = lo.sound;
 
@@ -410,10 +416,11 @@ void App::Tick(const Clock& pClock)
         r.uptimeS = mStatus.uptimeS;
         r.type = log::Type::Measurement;
         r.level = static_cast<uint8_t>(lo.level);
-        r.flags = static_cast<uint16_t>(
-            (pr.status == probe::Status::Stuck ? FLAG_STUCK : 0) | (mStatus.maintenance ? FLAG_MAINTENANCE : 0) |
-            (lo.silenced ? FLAG_SILENCED : 0) | (so.running ? FLAG_TEST_RUNNING : 0) | (lo.heat ? FLAG_HEAT : 0) |
-            (lt.has_value() ? 0 : FLAG_CLOCK_UNKNOWN) | (AnySuspended() ? FLAG_SUSPENDED : 0));
+        r.flags = static_cast<uint16_t>((pr.status == probe::Status::Stuck ? FLAG_STUCK : 0) |
+                                        (mStatus.maintenance ? FLAG_MAINTENANCE : 0) |
+                                        (lo.silenced ? FLAG_SILENCED : 0) | (so.running ? FLAG_TEST_RUNNING : 0) |
+                                        (lo.heat ? FLAG_HEAT : 0) | (lt.has_value() ? 0 : FLAG_CLOCK_UNKNOWN) |
+                                        (AnySuspended() ? FLAG_SUSPENDED : 0) | (lo.suspect ? FLAG_SUSPECT : 0));
         r.f0 = *doMed;
         r.f1 = *satMed;
         r.f2 = pr.reading->tempC;

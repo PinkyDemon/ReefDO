@@ -27,9 +27,20 @@ Config RandomConfig(proptest::Rng& pRng)
     c.recoverSustainS = 60 + pRng.Below(6) * 60;
     c.nightLock = pRng.Coin();
     c.blueSlopeMglPer10min = pRng.Coin(0.3) ? 0.5f : 0.0f;
+    c.suddenSlopeMglPer10min = pRng.Coin(0.5) ? 3.0f : 0.0f;
+    c.suddenExtendS = pRng.Below(3) * 60;
+    static const DayAlarm DAY[] = {DayAlarm::Sound, DayAlarm::AutoAck, DayAlarm::Suppress};
+    c.dayAlarm = DAY[pRng.Below(3)];
     c.pulseS = 10 + pRng.Below(3) * 10;
     c.pulseMinIntervalS = pRng.Below(3) * 300;
     return c;
+}
+
+bool HasAutoAck(const Output& pO)
+{
+    for(const Event& e : pO.events)
+        if(e.type == EventType::AutoAck) return true;
+    return false;
 }
 
 std::optional<Level> TriggerLevel(Trigger pT)
@@ -72,6 +83,7 @@ TEST_CASE("Ladder invariants hold on random histories", "[ladder][property]")
                 in.doMgl = pRng.Coin(0.08) ? std::nullopt : std::optional<float>(d);
                 in.tempC = in.doMgl.has_value() ? std::optional<float>(pRng.Uniform(25.0f, 29.0f)) : std::nullopt;
                 in.slopeMglPer10min = pRng.Uniform(-1.0f, 1.0f);
+                in.fastSlopeMglPer10min = pRng.Coin(0.1) ? pRng.Uniform(-9.0f, -3.0f) : pRng.Uniform(-2.0f, 2.0f);
                 in.minuteOfDay =
                     pRng.Coin(0.1) ? std::nullopt : std::optional<uint16_t>(static_cast<uint16_t>(pRng.Below(1440)));
                 in.ackPressed = pRng.Coin(0.05);
@@ -117,13 +129,18 @@ TEST_CASE("Ladder invariants hold on random histories", "[ladder][property]")
                     {
                         expect = *tl <= at; // no hidden escalation: nothing but the level (or FAULT) decides
                     }
-                    if(dc.ackSilences) expect = expect && at >= Level::Yellow && !o.silenced && !in.maintenance;
+                    if(dc.ackSilences)
+                        expect = expect && at >= Level::Yellow && !o.silenced && !o.suppressed && !in.maintenance;
                     REQUIRE(o.deviceOn[i] == expect);
                 }
 
-                // Invariant 4: the alarm may sound exactly when an alert or FAULT shows, unsilenced, not in
-                // maintenance.
-                REQUIRE(o.sound == ((o.level != Level::Normal || o.fault) && !o.silenced && !in.maintenance));
+                // Invariant 4: the alarm may sound exactly when an alert or FAULT shows, unsilenced, not
+                // suppressed, not in maintenance. Only the day suppresses, and only when configured to.
+                REQUIRE(o.sound ==
+                        ((o.level != Level::Normal || o.fault) && !o.silenced && !o.suppressed && !in.maintenance));
+                REQUIRE(o.suppressed == (cfg.dayAlarm == DayAlarm::Suppress && !IsNight(in.minuteOfDay, cfg)));
+                if(HasAutoAck(o)) REQUIRE((cfg.dayAlarm == DayAlarm::AutoAck && !IsNight(in.minuteOfDay, cfg)));
+                if(o.suspect) REQUIRE(cfg.suddenSlopeMglPer10min > 0.0f);
 
                 // Invariant 5: FAULT is loud and acts as at least Yellow.
                 if(o.fault)

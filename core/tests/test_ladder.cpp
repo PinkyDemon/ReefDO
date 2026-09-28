@@ -543,3 +543,109 @@ TEST_CASE("fault.alert off: failed polls are counted but FAULT never fires", "[l
     o = b.Tick(6.5f);
     REQUIRE_FALSE(HasEvent(o, EventType::FaultClear));
 }
+
+TEST_CASE("day_alarm auto_ack: an alarm is heard for DAY_ACK_AFTER_S, then acknowledges itself", "[ladder]")
+{
+    Bench b; // 12:00: day
+    b.cfg.dayAlarm = DayAlarm::AutoAck;
+    Output o = b.Hold(5.00f, 60);
+    REQUIRE(o.level == Level::Yellow);
+    REQUIRE(o.sound);
+    REQUIRE(o.deviceOn[3]); // the siren
+    b.nowMs -= 5'000;       // a 5 s sample period: heard for 5 s, not yet long enough
+    o = b.Tick(5.00f);
+    REQUIRE(o.sound);
+    REQUIRE(o.events.empty());
+    o = b.Tick(5.00f); // heard for DAY_ACK_AFTER_S
+    REQUIRE(HasEvent(o, EventType::AutoAck));
+    REQUIRE_FALSE(HasEvent(o, EventType::Ack));
+    REQUIRE(o.silenced);
+    REQUIRE_FALSE(o.sound);
+    REQUIRE_FALSE(o.deviceOn[3]);
+    REQUIRE(o.deviceOn[2]); // the pumps run on
+
+    // Deeper re-arms, and is announced again.
+    o = b.Tick(4.00f);
+    REQUIRE(o.level == Level::Red);
+    REQUIRE(o.sound);
+    REQUIRE(HasEvent(b.Tick(4.00f), EventType::AutoAck));
+
+    // The ack lasts ack_silence_s like a pressed one; an alarm still standing then is announced again.
+    o = b.Hold(4.00f, 1780);
+    REQUIRE(o.silenced);
+    o = b.Tick(4.00f);
+    REQUIRE(o.sound);
+    REQUIRE(o.events.empty());
+    REQUIRE(HasEvent(b.Tick(4.00f), EventType::AutoAck));
+
+    // The night is untouched.
+    Bench n;
+    n.cfg.dayAlarm = DayAlarm::AutoAck;
+    n.minute = uint16_t{23 * 60};
+    o = n.Hold(4.00f, 600);
+    REQUIRE(o.sound);
+    REQUIRE_FALSE(o.silenced);
+}
+
+TEST_CASE("day_alarm suppress: silent by day, the siren too; the level and the pumps run; the night sounds", "[ladder]")
+{
+    Bench b;
+    b.cfg.dayAlarm = DayAlarm::Suppress;
+    Output o = b.Hold(4.00f, 60);
+    REQUIRE(o.level == Level::Red);
+    REQUIRE(o.suppressed);
+    REQUIRE_FALSE(o.silenced);
+    REQUIRE_FALSE(o.sound);
+    REQUIRE_FALSE(o.deviceOn[3]);
+    REQUIRE(o.deviceOn[2]);
+    REQUIRE(o.deviceOn[0]);
+
+    b.minute = uint16_t{21 * 60};
+    o = b.Tick(4.00f);
+    REQUIRE_FALSE(o.suppressed);
+    REQUIRE(o.sound);
+    REQUIRE(o.deviceOn[3]);
+    b.minute = std::nullopt; // an unknown clock counts as night
+    REQUIRE(b.Tick(4.00f).sound);
+}
+
+TEST_CASE("A sudden drop is suspect: every dwell is extend_s longer until the reading is back", "[ladder]")
+{
+    Bench b; // defaults: 3 mg/L per 10 min over 2 min, 600 s
+    const auto fall = [](Input& pIn) { pIn.fastSlopeMglPer10min = -8.0f; };
+    Output o = b.Tick(6.5f, fall); // suspect before any threshold is crossed
+    REQUIRE(HasEvent(o, EventType::SuddenDrop));
+    REQUIRE(o.suspect);
+    o = b.Hold(4.00f, 590, fall); // Red's dwell: 0 + 600 s
+    REQUIRE(o.level == Level::Normal);
+    REQUIRE(o.events.empty()); // logged once
+    o = b.Tick(4.00f);         // no longer falling, but not back either
+    REQUIRE(o.level == Level::Red);
+    REQUIRE(o.suspect);
+    o = b.Tick(7.0f);
+    REQUIRE(HasEvent(o, EventType::SuddenClear));
+    REQUIRE_FALSE(o.suspect);
+    REQUIRE(o.level == Level::Red); // recovery as usual
+}
+
+TEST_CASE("A sudden dip back within extend_s changes no level; the threshold counts; 0 turns it off", "[ladder]")
+{
+    Bench b;
+    Output o = b.Hold(4.00f, 300, [](Input& pIn) { pIn.fastSlopeMglPer10min = -3.0f; });
+    REQUIRE(o.suspect);
+    REQUIRE(o.level == Level::Normal);
+    o = b.Tick(6.5f, [](Input& pIn) { pIn.fastSlopeMglPer10min = 9.0f; });
+    REQUIRE(HasEvent(o, EventType::SuddenClear));
+    REQUIRE(o.level == Level::Normal);
+
+    Bench slow;
+    o = slow.Tick(4.00f, [](Input& pIn) { pIn.fastSlopeMglPer10min = -2.9f; });
+    REQUIRE_FALSE(o.suspect);
+    REQUIRE(o.level == Level::Red);
+
+    Bench off;
+    off.cfg.suddenSlopeMglPer10min = 0.0f;
+    o = off.Tick(4.00f, [](Input& pIn) { pIn.fastSlopeMglPer10min = -50.0f; });
+    REQUIRE_FALSE(o.suspect);
+    REQUIRE(o.level == Level::Red);
+}

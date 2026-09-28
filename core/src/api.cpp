@@ -108,6 +108,7 @@ std::size_t StatusJson(const app::App& pApp, const app::Clock& pClock, std::span
     PutOptional(probe, "sat", s.satPct);
     PutOptional(probe, "temp", s.tempC);
     probe["slope"] = s.slopeMglPer10min;
+    probe["slope_2min"] = s.fastSlopeMglPer10min; // sudden-drop detection, mg/L per 10 min
     probe["status"] = PROBE_NAMES[static_cast<uint8_t>(s.probe)];
     probe["failures"] = s.consecutiveFailures;
 
@@ -122,6 +123,8 @@ std::size_t StatusJson(const app::App& pApp, const app::Clock& pClock, std::span
 
     lad["fault"] = s.fault;
     lad["silenced"] = s.silenced;
+    lad["suppressed"] = s.suppressed; // day_alarm suppress in effect
+    lad["suspect"] = s.suspect;       // a sudden drop: dwells extended by sudden_drop.extend_s
     lad["heat"] = s.heat;
     lad["maintenance"] = s.maintenance;
     lad["maintenance_s"] = s.maintenanceLeftS; // until it ends by itself; 0 when off

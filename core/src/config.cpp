@@ -26,6 +26,7 @@ constexpr const char* WIRED_NAMES[] = {"NO", "NC"}; // a 1.0 document's device-l
 constexpr const char* BUZZER_NAMES[] = {"off", "chirp", "beep", "double", "triple", "continuous"};
 constexpr const char* LEVEL_KEYS[] = {"blue", "yellow", "red"};
 constexpr const char* SIGNAL_KEYS[] = {"normal", "blue", "yellow", "red", "fault"};
+constexpr const char* DAY_ALARM_NAMES[] = {"sound", "auto_ack", "suppress"};
 
 Signal* SignalSlots(SignalsConfig& pS, std::size_t pI)
 {
@@ -463,6 +464,11 @@ const char* Name(BuzzerPattern pP)
     return BUZZER_NAMES[static_cast<uint8_t>(pP)];
 }
 
+const char* Name(ladder::DayAlarm pD)
+{
+    return DAY_ALARM_NAMES[static_cast<uint8_t>(pD)];
+}
+
 const Signal& SignalsConfig::of(ladder::Level pLevel, bool pIsFault) const
 {
     if(pIsFault) return fault;
@@ -551,6 +557,11 @@ LoadResult Load(std::string_view pJson, Config& pOut, const Config& pBase)
     r.Hhmm(night["end"], "night.end", cfg.ladder.nightEndMin);
     r.Flag(night, "lock", "night.lock", cfg.ladder.nightLock);
     r.Flag(night, "unknown_time_is_night", "night.unknown_time_is_night", cfg.ladder.unknownTimeIsNight);
+    r.Enumeration(night, "day_alarm", "night.day_alarm", cfg.ladder.dayAlarm, DAY_ALARM_NAMES);
+
+    const JsonObjectConst sudden = r.Object(root, "sudden_drop", "sudden_drop");
+    r.Number(sudden, "slope_mgl_per_10min", "sudden_drop.slope_mgl_per_10min", cfg.ladder.suddenSlopeMglPer10min);
+    r.Number(sudden, "extend_s", "sudden_drop.extend_s", cfg.ladder.suddenExtendS);
 
     const JsonObjectConst pulse = r.Object(root, "pulse", "pulse");
     r.Number(pulse, "s", "pulse.s", cfg.ladder.pulseS);
@@ -682,6 +693,11 @@ LoadResult Validate(const Config& pCfg)
     if(l.yellow.mgl - l.yellow.hysteresis <= l.red.mgl + l.red.hysteresis)
         return Invalid("levels", "the yellow and red bands overlap");
     if(l.blueSlopeMglPer10min < 0.0f) return Invalid("levels.blue.slope_mgl_per_10min", "must be >= 0");
+    if(l.suddenSlopeMglPer10min < 0.0f) return Invalid("sudden_drop.slope_mgl_per_10min", "must be >= 0");
+    // A fall that should warn early must not be one that delays the warning.
+    if(l.suddenSlopeMglPer10min > 0.0f && l.suddenSlopeMglPer10min <= l.blueSlopeMglPer10min)
+        return Invalid("sudden_drop.slope_mgl_per_10min", "must be steeper than levels.blue.slope_mgl_per_10min");
+    if(l.suddenExtendS > 3600) return Invalid("sudden_drop.extend_s", "must be 0..3600");
     if(l.recoverSustainS < 10) return Invalid("recover_sustain_s", "must be >= 10");
     if(l.heatOnC <= l.heatOffC) return Invalid("heat", "on_c must be above off_c");
     if(l.nightStartMin == l.nightEndMin) return Invalid("night", "start and end must differ");
@@ -805,6 +821,11 @@ std::size_t Write(const Config& pCfg, std::span<char> pOut, bool pRedact)
     night["end"] = std::string_view(hhmm);
     night["lock"] = l.nightLock;
     night["unknown_time_is_night"] = l.unknownTimeIsNight;
+    night["day_alarm"] = Name(l.dayAlarm);
+
+    JsonObject sudden = doc["sudden_drop"].to<JsonObject>();
+    sudden["slope_mgl_per_10min"] = l.suddenSlopeMglPer10min;
+    sudden["extend_s"] = l.suddenExtendS;
 
     JsonObject pulse = doc["pulse"].to<JsonObject>();
     pulse["s"] = l.pulseS;

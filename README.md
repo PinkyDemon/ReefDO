@@ -22,6 +22,12 @@ No server, no cloud.
 - FAULT when the probe stops answering, freezes or reports nonsense: it shows as FAULT and runs the devices of
   `fault.level` (Red by default). Otherwise only the level the readings support decides what runs and sounds —
   there is no hidden escalation.
+- A sudden drop is suspect: a fall steeper than `sudden_drop.slope_mgl_per_10min` (default 3 mg/L per 10 min,
+  measured over 2 min) is faster than tank water can lose oxygen — a snail or a bubble on the probe can. Until
+  the reading is back above every entry threshold, every level waits `sudden_drop.extend_s` (default 10 min)
+  longer than its dwell. It is logged, shown in the header and shaded on the chart.
+- By day (outside the night hours) alarms can sound as at night, acknowledge themselves after 10 s, or stay
+  silent (`night.day_alarm`); the level, its devices and the pushes are the same. The night always sounds.
 - A daily self test in the evening exercises the failsafe devices one by one and checks that each one
   actually moves the oxygen level; a device that does not is flagged and pushed (the flag changes nothing that
   runs; clear it on the Test page or the device card once the device is fixed). A miss that started at or above
@@ -112,7 +118,8 @@ Every setting on the Config page has a tooltip.
 ## Using it
 
 - **Status**: live values, level, devices, test state. **Acknowledge** silences the buzzer and any
-  ack-silenced device for a while; it never lowers the level.
+  ack-silenced device for a while; it never lowers the level. The header adds *silent by day* and *sudden drop*
+  when they apply.
 - **Chart**: 1 h / 6 h / 12 h / 24 h / 7 d / 90 d with thresholds, night hours, and event markers (hover them).
 - **Maintenance** has two separate parts:
   - **ReefDO maintenance** (work on the controller): maintenance mode mutes the buzzer and enables air
@@ -163,14 +170,16 @@ Reads are open; writes need Basic auth (`reef` / your password), e.g. `curl -u r
 | `GET /api/status` · `/api/test` · `/api/config` · `/api/sys` | JSON |
 | `GET /api/slots` | every output type's parameters as JSON Schema (titles, help, limits, defaults) |
 | `PUT /api/config` | full or partial document, validated |
-| `POST /api/cmd` | `{"ack":true}` · `{"maintenance":b}` · `{"test":"run"}` · `{"cal":"air"}` · `{"suspend":{"device":n,"s":secs}}` (`0` puts it back) · `{"manual":{"device":n,"on":b|null}}` (`null` = auto) · `{"clear":{"device":n}}` (a failed test verdict)\|null}}` (`null` = auto) · `{"time":{"unix":s,"tz":s}}` |
+| `POST /api/cmd` | `{"ack":true}` · `{"maintenance":b}` · `{"test":"run"}` · `{"cal":"air"}` · `{"suspend":{"device":n,"s":secs}}` (`0` puts it back) · `{"manual":{"device":n,"on":b|null}}` (`null` = auto) · `{"clear":{"device":n}}` (a failed test verdict) · `{"time":{"unix":s,"tz":s}}` |
 | `GET /api/series?tier=A\|B&from&to&every` · `/api/events?since` · `/api/export.csv?since` | CSV |
 | `POST /api/wifi` · `/api/passwd` · `/api/ota` · `/api/ntfy-test` · `/api/buzzer-test` · `/api/mute` | |
 
 ## Configuration keys
 
 `sample_period_s`, `levels.{blue,yellow,red}.{mgl,hysteresis,dwell_s}`, `levels.blue.slope_mgl_per_10min`,
-`recover_sustain_s`, `night.{start,end,lock,unknown_time_is_night}`, `pulse.{s,min_interval_s}`,
+`recover_sustain_s`, `night.{start,end,lock,unknown_time_is_night,day_alarm}` (`day_alarm`: `sound` (default),
+`auto_ack` or `suppress`), `sudden_drop.{slope_mgl_per_10min,extend_s}` (default 3 and 600; the slope must be
+steeper than Blue's slope trigger, 0 = off; `extend_s` 0..3600), `pulse.{s,min_interval_s}`,
 `heat.{on_c,off_c}`, `fault.{consecutive_failures,stuck_minutes,level,alert}`, `ack_silence_s`,
 `devices."1".."8".{name,slot,trigger,mode,ack_silences,test_s,min_response_pct,boost,windows}`
 (slot: the device's output, `{"type":"none"}`, `{"type":"relay","channel":1..6,"wiring":"NO"|"NC"}` or

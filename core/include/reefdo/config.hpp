@@ -103,6 +103,7 @@ struct Config
 const char* Name(ladder::Level pL);
 const char* Name(ladder::Trigger pT);
 const char* Name(BuzzerPattern pP);
+const char* Name(ladder::DayAlarm pD);
 
 // Factory defaults: device N on relay N (as far as there are relays), NO, trigger none — a fresh board switches
 // nothing.
@@ -133,7 +134,6 @@ LoadResult Validate(const Config& pCfg);
 // Serialise to JSON. Returns bytes written (no terminator), or 0 if it does not fit.
 // pRedact: secret slot parameters (a plug's local key) come out as KEY_REDACTED (for anything a browser sees);
 // Load keeps the stored value when it reads the placeholder back.
-// when it reads that placeholder back.
 constexpr const char* KEY_REDACTED = "********";
 std::size_t Write(const Config& pCfg, std::span<char> pOut, bool pRedact = false);
 // Every slot type's parameters as JSON Schema, {"none": {...}, "relay": {...}, "tuya": {...}}: titles, help,

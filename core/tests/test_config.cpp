@@ -9,6 +9,7 @@
 using namespace reefdo::config;
 using Catch::Matchers::WithinAbs;
 using reefdo::FixedString;
+using reefdo::ladder::DayAlarm;
 using reefdo::ladder::Level;
 using reefdo::ladder::Mode;
 using reefdo::ladder::Trigger;
@@ -254,6 +255,9 @@ TEST_CASE("Every wrong-type and bad-value path reports its dotted key", "[config
          "ntfy.topic"},
         {R"({"night":{"start": 2100}})", LoadError::WrongType, "night.start"},
         {R"({"night":{"start": "25:00"}})", LoadError::BadValue, "night.start"},
+        {R"({"night":{"day_alarm": "mute"}})", LoadError::BadValue, "night.day_alarm"},
+        {R"({"sudden_drop": 3})", LoadError::WrongType, "sudden_drop"},
+        {R"({"sudden_drop":{"extend_s": "10 min"}})", LoadError::WrongType, "sudden_drop.extend_s"},
         {R"({"devices":{"3":{"trigger": "purple"}}})", LoadError::BadValue, "devices.3.trigger"},
         {R"({"signals":{"red":{"buzzer": "siren"}}})", LoadError::BadValue, "signals.red.buzzer"},
         {R"({"signals":{"yellow":{"volume": "loud"}}})", LoadError::WrongType, "signals.yellow.volume"},
@@ -311,6 +315,9 @@ TEST_CASE("Every validation rule fires on its own key", "[config]")
         {"levels", [](Config& pC) { pC.ladder.blue.mgl = 5.4f; }}, // blue band touches yellow's
         {"levels", [](Config& pC) { pC.ladder.red.mgl = 5.0f; }},  // red band touches yellow's
         {"levels.blue.slope_mgl_per_10min", [](Config& pC) { pC.ladder.blueSlopeMglPer10min = -1.0f; }},
+        {"sudden_drop.slope_mgl_per_10min", [](Config& pC) { pC.ladder.suddenSlopeMglPer10min = -1.0f; }},
+        {"sudden_drop.slope_mgl_per_10min", [](Config& pC) { pC.ladder.blueSlopeMglPer10min = 3.0f; }},
+        {"sudden_drop.extend_s", [](Config& pC) { pC.ladder.suddenExtendS = 3601; }},
         {"recover_sustain_s", [](Config& pC) { pC.ladder.recoverSustainS = 5; }},
         {"heat", [](Config& pC) { pC.ladder.heatOffC = 28.0f; }},
         {"night", [](Config& pC) { pC.ladder.nightEndMin = pC.ladder.nightStartMin; }},
@@ -800,6 +807,30 @@ TEST_CASE("Outputs are exclusive (Slot == is IsSame), and a device that is used 
     ok.devices[7].slot = reefdo::slot::Relay(6, Wiring::Nc);
     ok.ladder.devices[7].trigger = Trigger::Yellow;
     REQUIRE(Validate(ok).Ok());
+}
+
+TEST_CASE("night.day_alarm and sudden_drop load and round-trip; the defaults suspect a sudden drop", "[config]")
+{
+    Config c;
+    REQUIRE(c.ladder.dayAlarm == DayAlarm::Sound);
+    REQUIRE(c.ladder.suddenSlopeMglPer10min > 0.0f);
+    REQUIRE(
+        Load(R"({"night":{"day_alarm":"auto_ack"},"sudden_drop":{"slope_mgl_per_10min":4.5,"extend_s":900}})", c).Ok());
+    REQUIRE(c.ladder.dayAlarm == DayAlarm::AutoAck);
+    REQUIRE_THAT(c.ladder.suddenSlopeMglPer10min, WithinAbs(4.5, 1e-6));
+    REQUIRE(c.ladder.suddenExtendS == 900);
+    REQUIRE(Dump(c).find(R"("day_alarm":"auto_ack")") != std::string::npos);
+    Config back;
+    REQUIRE(Load(Dump(c), back).Ok());
+    REQUIRE(back == c);
+
+    c.ladder.dayAlarm = DayAlarm::Suppress;
+    c.ladder.suddenSlopeMglPer10min = 0.0f; // off: the blue slope has nothing to be steeper than
+    c.ladder.blueSlopeMglPer10min = 5.0f;
+    REQUIRE(Validate(c).Ok());
+    REQUIRE(Load(Dump(c), back).Ok());
+    REQUIRE(back == c);
+    REQUIRE(Dump(c).find(R"("day_alarm":"suppress")") != std::string::npos);
 }
 
 TEST_CASE("test.no_fail_above_mgl loads and round-trips", "[config]")

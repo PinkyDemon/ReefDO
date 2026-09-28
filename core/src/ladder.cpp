@@ -80,6 +80,7 @@ void UpdateLevel(State& pS, const Input& pIn, const Config& pCfg, Output& pOut)
     const Level prev = pS.level;
 
     // Entry timers, one per level.
+    bool below = false;
     for(uint8_t i = 1; i <= 3; ++i)
     {
         const Level l = static_cast<Level>(i);
@@ -87,6 +88,7 @@ void UpdateLevel(State& pS, const Input& pIn, const Config& pCfg, Output& pOut)
         if(EntryCondition(l, d, pIn.slopeMglPer10min, pCfg))
         {
             if(!since.has_value()) since = pIn.nowMs;
+            below = true;
         }
         else
         {
@@ -94,13 +96,27 @@ void UpdateLevel(State& pS, const Input& pIn, const Config& pCfg, Output& pOut)
         }
     }
 
+    // A fall faster than water can lose oxygen is suspect until the reading is back above every entry threshold.
+    const bool sudden = pCfg.suddenSlopeMglPer10min > 0.0f && pIn.fastSlopeMglPer10min <= -pCfg.suddenSlopeMglPer10min;
+    if(sudden && !pS.suspect)
+    {
+        pS.suspect = true;
+        pOut.events.push_back({EventType::SuddenDrop});
+    }
+    else if(pS.suspect && !sudden && !below)
+    {
+        pS.suspect = false;
+        pOut.events.push_back({EventType::SuddenClear});
+    }
+    const uint32_t extendS = pS.suspect ? pCfg.suddenExtendS : 0;
+
     // Deepest level (deeper than the current one) whose dwell has elapsed wins — levels may be skipped downward.
     Level candidate = pS.level;
     for(uint8_t i = 3; i > static_cast<uint8_t>(pS.level); --i)
     {
         const Level l = static_cast<Level>(i);
         const std::optional<uint64_t>& since = pS.belowSinceMs[i - 1];
-        if(since.has_value() && pIn.nowMs - *since >= Ms(pCfg.GetLevel(l).dwellS))
+        if(since.has_value() && pIn.nowMs - *since >= Ms(pCfg.GetLevel(l).dwellS) + Ms(extendS))
         {
             candidate = l;
             break;
@@ -229,15 +245,36 @@ Output Step(State& pS, const Input& pIn, const Config& pCfg)
         pS.ackUntilMs = pIn.nowMs + Ms(pCfg.ackSilenceS);
         out.events.push_back({EventType::Ack});
     }
-    const bool silenced = pS.ackUntilMs.has_value() && pIn.nowMs < *pS.ackUntilMs;
+    bool silenced = pS.ackUntilMs.has_value() && pIn.nowMs < *pS.ackUntilMs;
 
-    UpdateDevices(pS, pIn, pCfg, DevicesLevel(pS, pCfg), silenced, out);
+    // By day an alarm may acknowledge itself once it has been heard, or not sound at all.
+    const bool alarm = (pS.level != Level::Normal || pS.fault) && !pIn.maintenance;
+    if(night || pCfg.dayAlarm != DayAlarm::AutoAck || !alarm || silenced)
+    {
+        pS.soundingSinceMs.reset();
+    }
+    else if(!pS.soundingSinceMs.has_value())
+    {
+        pS.soundingSinceMs = pIn.nowMs;
+    }
+    else if(pIn.nowMs - *pS.soundingSinceMs >= Ms(DAY_ACK_AFTER_S))
+    {
+        pS.ackUntilMs = pIn.nowMs + Ms(pCfg.ackSilenceS);
+        pS.soundingSinceMs.reset();
+        silenced = true;
+        out.events.push_back({EventType::AutoAck});
+    }
+    const bool suppressed = !night && pCfg.dayAlarm == DayAlarm::Suppress;
+
+    UpdateDevices(pS, pIn, pCfg, DevicesLevel(pS, pCfg), silenced || suppressed, out);
 
     out.level = pS.level;
     out.fault = pS.fault;
     out.silenced = silenced;
+    out.suppressed = suppressed;
+    out.suspect = pS.suspect;
     out.heat = pS.heat;
-    out.sound = (pS.level != Level::Normal || pS.fault) && !silenced && !pIn.maintenance;
+    out.sound = alarm && !silenced && !suppressed;
     return out;
 }
 

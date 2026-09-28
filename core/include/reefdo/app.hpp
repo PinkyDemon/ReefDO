@@ -90,6 +90,7 @@ enum MeasurementFlag : uint16_t
     FLAG_HEAT = 16,
     FLAG_CLOCK_UNKNOWN = 32,
     FLAG_SUSPENDED = 64, // a device is out of order (device maintenance)
+    FLAG_SUSPECT = 128,  // a sudden drop: the ladder's dwells are extended
 };
 
 // Command records: aux = 1 maintenance on, 2 maintenance off (f1 = 0 command, 1 time ran out), 3 air calibration
@@ -100,7 +101,8 @@ enum MeasurementFlag : uint16_t
 //   11 a failed test verdict cleared by hand (| device << 8)
 // Test records: aux = event type | device << 8 | outcome << 16 | skip << 24, flags = judged 1 | clock unknown 2
 //   | aborted 4 | high DO 8 (a missed response let off: f1 = DO at the device's start, f2 = the limit)
-// Ladder event records: aux = ladder::EventType, flags = from | to << 8, aux device in bits 8..15 for Pulse
+// Ladder event records: aux = ladder::EventType, flags = from | to << 8, aux device in bits 8..15 for Pulse,
+//   f0 = DO; SuddenDrop: f1 = the 2 min slope (mg/L per 10 min)
 
 struct Status
 {
@@ -108,11 +110,14 @@ struct Status
     std::optional<float> satPct; // median-filtered
     std::optional<float> tempC;
     float slopeMglPer10min = 0.0f;
+    float fastSlopeMglPer10min = 0.0f; // over 2 min: sudden-drop detection
     probe::Status probe = probe::Status::Timeout;
     uint32_t consecutiveFailures = 0;
     ladder::Level level = ladder::Level::Normal;
     bool fault = false;
     bool silenced = false;
+    bool suppressed = false; // day_alarm suppress in effect
+    bool suspect = false;    // a sudden drop: dwells extended
     bool heat = false;
     bool maintenance = false;
     uint32_t maintenanceLeftS = 0;                     // until maintenance mode ends by itself
@@ -228,6 +233,7 @@ private:
     filter::Median5 mMedDo;
     filter::Median5 mMedSat;
     filter::SlopeEstimator mSlopeDo{600'000};
+    filter::SlopeEstimator mFastSlopeDo{120'000};
     log::Aggregator mAggregator;
     std::optional<uint32_t> mAggregateBucket;
     Daily mDaily;

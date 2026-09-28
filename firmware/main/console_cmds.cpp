@@ -95,17 +95,19 @@ int CmdStatus(int pArgc, char** pArgv)
                 clock.unixS ? "set" : "UNKNOWN", static_cast<long>(clock.tzOffsetS));
     if(s.doMgl)
     {
-        std::printf("DO %.2f mg/L  sat %.1f %%  temp %.2f C  slope %+.3f mg/L/10min\n", static_cast<double>(*s.doMgl),
-                    static_cast<double>(s.satPct.value_or(0.0f)), static_cast<double>(s.tempC.value_or(0.0f)),
-                    static_cast<double>(s.slopeMglPer10min));
+        std::printf("DO %.2f mg/L  sat %.1f %%  temp %.2f C  slope %+.3f (2 min %+.3f) mg/L/10min\n",
+                    static_cast<double>(*s.doMgl), static_cast<double>(s.satPct.value_or(0.0f)),
+                    static_cast<double>(s.tempC.value_or(0.0f)), static_cast<double>(s.slopeMglPer10min),
+                    static_cast<double>(s.fastSlopeMglPer10min));
     }
     else
     {
         std::printf("DO --  probe status %d, %lu consecutive failures\n", static_cast<int>(s.probe),
                     static_cast<unsigned long>(s.consecutiveFailures));
     }
-    std::printf("level %s%s%s%s%s\n", LEVEL[static_cast<int>(s.level)], s.fault ? "  FAULT" : "",
-                s.silenced ? "  silenced" : "", s.heat ? "  heat" : "", s.maintenance ? "  MAINTENANCE" : "");
+    std::printf("level %s%s%s%s%s%s%s\n", LEVEL[static_cast<int>(s.level)], s.fault ? "  FAULT" : "",
+                s.silenced ? "  silenced" : "", s.suppressed ? "  silent by day" : "", s.suspect ? "  sudden drop" : "",
+                s.heat ? "  heat" : "", s.maintenance ? "  MAINTENANCE" : "");
     if(s.maintenance)
         std::printf("maintenance ends by itself in %lu min\n",
                     static_cast<unsigned long>((s.maintenanceLeftS + 59) / 60));

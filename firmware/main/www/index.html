@@ -246,6 +246,8 @@ h2{font-size:16px;margin:18px 0 10px}
     <div class="form" style="margin-top:10px">
       <label class="f">recover: above "leaves" for (s) <input data-k="recover_sustain_s"></label>
       <label class="f">Blue slope trigger, mg/L per 10 min (0 = off) <input data-k="levels.blue.slope_mgl_per_10min"></label>
+      <label class="f">sudden drop, mg/L per 10 min over 2 min (0 = off) <input data-k="sudden_drop.slope_mgl_per_10min"></label>
+      <label class="f">sudden drop: every dwell longer by (s) <input data-k="sudden_drop.extend_s"></label>
     </div>
   </div>
 
@@ -297,6 +299,7 @@ h2{font-size:16px;margin:18px 0 10px}
       <div class="form"><label class="f">start <input type="time" data-k="night.start"></label><label class="f">end <input type="time" data-k="night.end"></label></div>
       <div class="row" style="margin-top:8px"><label class="c"><input type="checkbox" data-k="night.lock"> night lock (hold ≥ Blue until morning once triggered)</label></div>
       <div class="row"><label class="c"><input type="checkbox" data-k="night.unknown_time_is_night"> unknown clock counts as night</label></div>
+      <div class="form" style="margin-top:8px"><label class="f">alarms by day <select data-k="night.day_alarm"><option value="sound">sound</option><option value="auto_ack">acknowledge after 10 s</option><option value="suppress">silent</option></select></label></div>
     </div>
     <div class="card"><h3>Heat</h3>
       <div class="form"><label class="f">on above (°C) <input data-k="heat.on_c"></label><label class="f">off below (°C) <input data-k="heat.off_c"></label></div>
@@ -474,7 +477,8 @@ let ST=null, CFG=null, WIFI=null;
 function pill(el,s){
   const maint=s.ladder.maintenance, fault=s.ladder.fault, lv=s.ladder.level;
   el.className='pill '+(maint?'lv-maint':fault?'lv-fault':'lv-'+lv);
-  el.innerHTML='<span class="dot"></span>'+(maint?'MAINTENANCE · '+fmtLeft(s.ladder.maintenance_s):fault?'FAULT':lv.toUpperCase())+(s.ladder.silenced?' · silenced':'');
+  const alarm=lv!=='normal'||fault;
+  el.innerHTML='<span class="dot"></span>'+(maint?'MAINTENANCE · '+fmtLeft(s.ladder.maintenance_s):fault?'FAULT':lv.toUpperCase())+(s.ladder.silenced?' · silenced':alarm&&s.ladder.suppressed?' · silent by day':'')+(s.ladder.suspect?' · sudden drop':'');
 }
 function fmtLeft(s){ return s>=3600?Math.floor(s/3600)+' h '+String(Math.floor(s%3600/60)).padStart(2,'0')+' min':Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
 function devCard(d,i){
@@ -518,7 +522,7 @@ async function refresh(){
   $('th-yellow').textContent='< '+l.enters_below.yellow.toFixed(2)+' · leaves > '+l.leaves_above.yellow.toFixed(2);
   $('th-red').textContent='< '+l.enters_below.red.toFixed(2)+' · leaves > '+l.leaves_above.red.toFixed(2);
   const alarm=l.level!=='normal'||l.fault;
-  $('ackbtn').disabled=!alarm||l.silenced; $('acknote').textContent=alarm?(l.silenced?'silenced':'silences the buzzer and ack devices for a while; the level stays'):'nothing to acknowledge';
+  $('ackbtn').disabled=!alarm||l.silenced; $('acknote').textContent=alarm?(l.silenced?'silenced':l.suppressed?'silent by day (alarms by day: silent)':'silences the buzzer and ack devices for a while; the level stays'):'nothing to acknowledge';
   $('svc-window').textContent=s.test.window_start+' – '+s.test.window_end;
   $('svc-state').textContent=s.test.running?('running · device '+s.test.device+' · '+s.test.phase):'idle'+(s.test.inconclusive_alert?' · inconclusive streak':'')+(s.test.exclusive?'':' · checks off (not exclusive)');
   $('boost-state').textContent=s.boost.enabled?(s.boost.window_start+' – '+s.boost.window_end+' · to '+s.boost.target_mgl.toFixed(2)+' mg/L'+(s.boost.running?' · running':'')):'off';
@@ -603,6 +607,7 @@ async function drawChart(){
   const mark=(x,col,label,r)=>{ if(r){ const [,m,v]=describe(r); marks.push({x,text:fmtTime(r.ts)+'  '+m+(v?' · '+v:'')}); } c.strokeStyle=css(col); c.globalAlpha=.7; c.setLineDash([2,3]); c.beginPath(); c.moveTo(x,T); c.lineTo(x,T+h); c.stroke(); c.setLineDash([]); c.globalAlpha=1; if(label){ c.fillStyle=css(col); c.fillText(label,x+2,T+11); } };
   let runStart=null;
   let boostStart=null;
+  let dropStart=null;
   for(const r of EVENTS){
     if(!r.ts||r.ts<t0||r.ts>now) continue;
     const x=X(r.ts);
@@ -618,13 +623,16 @@ async function drawChart(){
     if(r.type===2){ const t=r.aux&255;
       if(t===0){ const to=LEVEL[(r.flags>>8)&255]; mark(x,'--'+(to==='normal'?'green':to),'',r); }
       else if(t===2) mark(x,'--purple','!',r);
-      else if(t===4) mark(x,'--muted','A',r);
+      else if(t===4||t===8) mark(x,'--muted','A',r);
+      else if(t===9){ dropStart=r.ts; mark(x,'--purple','?',r); }
+      else if(t===10&&dropStart!=null){ c.fillStyle=css('--purple'); c.globalAlpha=.12; c.fillRect(X(dropStart),T,Math.max(2,x-X(dropStart)),h); c.globalAlpha=1; marks.push({x,text:fmtTime(r.ts)+'  '+describe(r)[1]}); dropStart=null; }
       continue; }
     if(r.type===3) mark(x,'--muted','B',r);
     if(r.type===7&&r.aux===3) mark(x,'--muted','C',r);
   }
   if(runStart!=null){ c.fillStyle=css('--white'); c.globalAlpha=.3; c.fillRect(X(runStart),T,Math.max(2,X(now)-X(runStart)),h); c.globalAlpha=1; }
   if(boostStart!=null){ c.fillStyle=css('--cyan'); c.globalAlpha=.25; c.fillRect(X(boostStart),T,Math.max(2,X(now)-X(boostStart)),h); c.globalAlpha=1; c.fillStyle=css('--cyan'); c.fillText('boost',X(boostStart)+2,T+11); }
+  if(dropStart!=null){ c.fillStyle=css('--purple'); c.globalAlpha=.12; c.fillRect(X(dropStart),T,Math.max(2,X(now)-X(dropStart)),h); c.globalAlpha=1; }
   if(showT){
     const temps=days<=1?data.map(d=>d.temp):data.map(d=>(d.temp_min+d.temp_max)/2);
     const tmin=Math.min(...temps)-0.5, tmax=Math.max(...temps)+0.5, TY=v=>T+(tmax-v)/(tmax-tmin)*h;
@@ -633,7 +641,7 @@ async function drawChart(){
     c.fillStyle=css('--purple'); for(let v=Math.ceil(tmin);v<=tmax;v++) c.fillText(v+'°',6,TY(v)+4);
   }
   c.fillStyle=css('--muted'); c.fillText('mg/L',L+w+6,T+2); if(showT){ c.fillStyle=css('--purple'); c.fillText('°C',6,T+2); }
-  $('legend').innerHTML=`<span><i style="background:var(--text)"></i>DO mg/L</span><span><i style="background:var(--blue)"></i>Blue ${TH.blue.mgl} ± ${TH.blue.hysteresis}</span><span><i style="background:var(--yellow)"></i>Yellow ${TH.yellow.mgl} ± ${TH.yellow.hysteresis}</span><span><i style="background:var(--red)"></i>Red ${TH.red.mgl} ± ${TH.red.hysteresis}</span><span><i style="background:var(--line);height:10px"></i>night ${CFG.night.start}–${CFG.night.end}</span><span>level strip at bottom</span><span>dashed = level change · T test run · ! fault · A ack · B boot · C calibration · F failed check</span>`;
+  $('legend').innerHTML=`<span><i style="background:var(--text)"></i>DO mg/L</span><span><i style="background:var(--blue)"></i>Blue ${TH.blue.mgl} ± ${TH.blue.hysteresis}</span><span><i style="background:var(--yellow)"></i>Yellow ${TH.yellow.mgl} ± ${TH.yellow.hysteresis}</span><span><i style="background:var(--red)"></i>Red ${TH.red.mgl} ± ${TH.red.hysteresis}</span><span><i style="background:var(--line);height:10px"></i>night ${CFG.night.start}–${CFG.night.end}</span><span>level strip at bottom</span><span>dashed = level change · T test run · ! fault · A ack · ? sudden drop (shaded while suspect) · B boot · C calibration · F failed check</span>`;
   const ro=$('readout');
   cv.onmousemove=cv.ontouchmove=ev=>{ const r=cv.getBoundingClientRect(); const px=(ev.touches?ev.touches[0].clientX:ev.clientX)-r.left; if(px<L||px>L+w){ro.style.display='none';return;} const t=t0+(px-L)/w*(now-t0); let i=0; while(i<data.length-1&&data[i+1].ts<t) i++; const d=data[i]; const v=days<=1?d.do:d.do_avg; ro.style.display='block'; const near=marks.filter(m=>Math.abs(m.x-px)<=4).map(m=>m.text); ro.textContent=near.length?near.join('\n'):fmtTime(d.ts)+'  '+v.toFixed(2)+' mg/L'+(days<=1?'  '+d.sat.toFixed(1)+' %':''); };
   cv.onmouseleave=()=>ro.style.display='none';
@@ -641,7 +649,7 @@ async function drawChart(){
 
 // ---------- events ----------
 const TYPE={3:'Boot',4:'Fault',5:'Config',6:'Correction',7:'Command',8:'TimeSync',9:'Daily'};
-const LADDER_EV=['Level','Effective level (1.0)','FAULT','FAULT cleared','Ack','Pulse off','Heat on','Heat off'];
+const LADDER_EV=['Level','Effective level (1.0)','FAULT','FAULT cleared','Ack','Pulse off','Heat on','Heat off','Ack (automatic, by day)','Sudden drop','Sudden drop over'];
 const SVC_EV=['Test start','Device start','Device end','Test end','Test skipped','Test FAIL','Test fail cleared','Test inconclusive'];
 const BOOST_EV=['Boost start','Boost target reached','Boost window end','Boost paused'];
 const OUTCOME=['—','pass','FAIL','inconclusive','unchecked'];
@@ -652,7 +660,10 @@ function describe(r){
   const dev=i=>(i+1)+' · '+(CFG&&CFG.devices[i+1]?CFG.devices[i+1].name:'device');
   if(r.type===2){ const t=r.aux&255, d=(r.aux>>8)&255, from=LEVEL[r.flags&255], to=LEVEL[(r.flags>>8)&255];
     if(t<=1) return [to, LADDER_EV[t]+' '+from+' → '+to, r.f0.toFixed(2)+' mg/L'];
-    if(t===5) return ['blue', 'Pulse off · '+dev(d), '']; return [t===2?'fault':'normal', LADDER_EV[t]||('event '+t), r.f0?r.f0.toFixed(2)+' mg/L':''];
+    if(t===5) return ['blue', 'Pulse off · '+dev(d), ''];
+    if(t===9) return ['fail', 'Sudden drop', r.f0.toFixed(2)+' mg/L · falling '+(-r.f1).toFixed(1)+' mg/L per 10 min · dwells extended'];
+    if(t===10) return ['normal', 'Sudden drop over', r.f0.toFixed(2)+' mg/L · back above every threshold, dwells normal'];
+    return [t===2?'fault':'normal', LADDER_EV[t]||('event '+t), r.f0?r.f0.toFixed(2)+' mg/L':''];
   }
   if(r.type===10){ const t=r.aux&255, d=(r.aux>>8)&255, o=(r.aux>>16)&255, sk=(r.aux>>24)&255;
     if(t===2) return [o===2?'fail':'test', 'Device end · '+dev(d), OUTCOME[o]+' · '+r.f0.toFixed(1)+' %'+highDo(r)];
@@ -743,6 +754,9 @@ const TIPS={
  'night.end':'End of the night hours.',
  'night.lock':'Once an alert triggers at night, hold at least Blue until morning even if DO recovers — the devices keep running through the risky hours.',
  'night.unknown_time_is_night':'If the board does not know the time, treat it as night (the safe assumption).',
+ 'night.day_alarm':'Outside the night hours: sound = as at night; acknowledge after 10 s = an alarm sounds briefly, then acknowledges itself as if Ack were pressed (a deeper level or FAULT announces again); silent = the buzzer and ack-silenced devices stay quiet. The level, its devices and the pushes are unchanged. The night always sounds.',
+ 'sudden_drop.slope_mgl_per_10min':'A fall steeper than this over the last 2 minutes is suspect: tank water cannot lose oxygen that fast, a snail or a bubble on the probe can. Must be steeper than the Blue slope trigger. 0 = off.',
+ 'sudden_drop.extend_s':'While a sudden drop is suspect, every level waits this much longer than its dwell. The suspicion ends when the reading is back above every entry threshold. 0 = only log it.',
  'heat.on_c':'Devices with trigger = heat switch on above this water temperature (fan, chiller).',
  'heat.off_c':'…and off again below this. The gap avoids toggling.',
  'sample_period_s':'Seconds between probe readings (5..60). Every reading is logged.',

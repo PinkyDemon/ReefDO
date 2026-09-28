@@ -65,6 +65,9 @@ TEST_CASE("status_json describes the device, the ladder thresholds, and every de
     REQUIRE(d["ladder"]["level"] == "normal");
     REQUIRE(d["ladder"]["buzzer"] == "off");
     REQUIRE(d["ladder"]["maintenance_s"] == 0);
+    REQUIRE(d["ladder"]["suppressed"] == false);
+    REQUIRE(d["ladder"]["suspect"] == false);
+    REQUIRE(d["probe"]["slope_2min"].is<float>());
     REQUIRE(d["ladder"]["led"].isNull()); // the LED codes are the firmware's
     REQUIRE(d["ladder"]["enters_below"]["blue"].as<float>() == Catch::Approx(5.65f));
     REQUIRE(d["ladder"]["leaves_above"]["red"].as<float>() == Catch::Approx(4.70f));

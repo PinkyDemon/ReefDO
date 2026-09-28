@@ -42,6 +42,12 @@ Facts an agent needs to work in this repository. The README covers usage; this c
   hidden escalation: a failed test verdict is shown and pushed but changes nothing that runs or sounds
   (`App::ClearFailure` clears it by hand). FAULT shows as FAULT and runs `fault.level`'s devices (Red by default);
   the level stays frozen at what the last readings said.
+- The ladder's own caution is visible too: a sudden drop (`Input::fastSlopeMglPer10min`, the App's 2 min
+  `SlopeEstimator`, steeper than `sudden_drop.slope_mgl_per_10min`) sets `Output::suspect`, logged as
+  SuddenDrop / SuddenClear and flagged in Measurement records (`FLAG_SUSPECT`); while suspect every dwell is
+  `sudden_drop.extend_s` longer. `night.day_alarm` only changes the sound by day: `AutoAck` acknowledges after
+  `ladder::DAY_ACK_AFTER_S` (logged as AutoAck), `Suppress` sets `Output::suppressed`; the level, its devices
+  and the pushes never depend on it. The night and an unknown clock (with `unknown_time_is_night`) always sound.
 - Device demand is the OR of the ladder, the self test (`selftest.cpp`, called "service" up to 1.0), the
   boost (`boost.cpp`), the always-on windows and the manual switch (`app::Demand`, reported as
   `Status::deviceWhy`); the boost yields to a test run and maintenance and runs at most once per local day; an

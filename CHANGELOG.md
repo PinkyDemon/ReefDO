@@ -1,6 +1,10 @@
 ## Version History
 
-### 
+### Changes in v1.1.0-rc3
+
+* Added sudden drop suspicion: a fall steeper than sudden\_drop.slope\_mgl\_per\_10min (default 3 mg/L per 10 min, measured over 2 min) is faster than tank water can lose oxygen. Until the reading is back above every entry threshold, every level waits sudden\_drop.extend\_s (default 10 min) longer than its dwell. Logged, shown in the header and shaded on the chart
+* Added alarm handling by day (night.day\_alarm): outside the night hours an alarm can sound as at night, acknowledge itself after 10 s, or stay silent. The level, its devices and the pushes are unchanged, the night always sounds
+* Added the 2 minute slope to the status (probe.slope\_2min) and the console
 
 ### Changes in v1.1.0-rc2
 

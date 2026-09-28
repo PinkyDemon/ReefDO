@@ -61,6 +61,7 @@ inline reefdo::config::Config ExampleConfig()
     dev(5, "unused", false, Trigger::None, Mode::On, false, 0, 0.0f);
     c.test.windowStartMin = 19 * 60 + 30; // the scenarios are written for 19:30–21:00
     c.test.windowEndMin = 21 * 60;
+    c.ladder.suddenSlopeMglPer10min = 0.0f; // the scenarios step the tank; sudden drops have their own
     return c;
 }
 

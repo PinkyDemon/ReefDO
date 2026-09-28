@@ -178,6 +178,49 @@ TEST_CASE("fast_crash_straight_to_red: Red is immediate, urgent, repeats every 2
     REQUIRE(s.LastNote(NotifyKind::Level)->repeat);
 }
 
+TEST_CASE("sudden_drop: a step fall is suspect, logged with its slope and flagged; Red waits extend_s", "[app]")
+{
+    reefdo::config::Config c = ExampleConfig();
+    c.ladder.suddenSlopeMglPer10min = 3.0f; // 600 s by default
+    Scenario s(c);
+    const auto lastMeasurement = [&s]()
+    {
+        std::optional<reefdo::log::Record> m;
+        for(std::size_t i = 0; i < s.app.LogA().Count(); ++i)
+        {
+            const std::optional<reefdo::log::Record> r = s.app.LogA().At(i);
+            if(r.has_value() && r->type == Type::Measurement) m = r;
+        }
+        return *m;
+    };
+    s.Start();
+    s.RunS(600);
+    REQUIRE_FALSE(s.app.GetStatus().suspect);
+    s.tank.SetSat(55.0f);
+    s.RunS(120);
+    REQUIRE(s.app.GetStatus().suspect);
+    REQUIRE(s.app.GetStatus().level == Level::Normal); // Red already without the suspicion (fast_crash_straight_to_red)
+    REQUIRE((lastMeasurement().flags & reefdo::app::FLAG_SUSPECT) != 0);
+    std::optional<reefdo::log::Record> drop;
+    for(std::size_t i = 0; i < s.app.LogE().Count(); ++i)
+    {
+        const std::optional<reefdo::log::Record> r = s.app.LogE().At(i);
+        if(r->type == Type::Event && r->aux == static_cast<uint32_t>(reefdo::ladder::EventType::SuddenDrop)) drop = r;
+    }
+    REQUIRE(drop.has_value());
+    REQUIRE(drop->f1 <= -3.0f);
+    s.RunS(360);
+    REQUIRE(s.app.GetStatus().level == Level::Normal);
+    REQUIRE(s.RunUntilLevel(Level::Red, 300));
+
+    // Back: the suspicion clears, and recovery is the usual one.
+    s.tank.SetSat(104.0f);
+    s.RunS(300);
+    REQUIRE_FALSE(s.app.GetStatus().suspect);
+    REQUIRE((lastMeasurement().flags & reefdo::app::FLAG_SUSPECT) == 0);
+    REQUIRE(s.app.GetStatus().level == Level::Red);
+}
+
 TEST_CASE(
     "test_run_daily and test_no_response: the check passes, then a dead bubbler fails, shown but escalating nothing",
     "[app]")

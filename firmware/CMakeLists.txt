@@ -7,6 +7,8 @@ cmake_minimum_required(VERSION 3.24)
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
 # One version string for host and board: core/include/reefdo/version.hpp
+# (a configure dependency, so that a bump re-runs this and reaches the app descriptor)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_LIST_DIR}/../core/include/reefdo/version.hpp")
 file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/../core/include/reefdo/version.hpp" _ver_line REGEX "VERSION = ")
 string(REGEX MATCH "\"([^\"]+)\"" _ver_quoted "${_ver_line}")
 string(REPLACE "\"" "" PROJECT_VER "${_ver_quoted}")
