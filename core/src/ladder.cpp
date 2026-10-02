@@ -1,5 +1,7 @@
 #include "reefdo/ladder.hpp"
 
+#include <algorithm>
+
 namespace reefdo::ladder
 {
 
@@ -16,7 +18,7 @@ Level Shallower(Level pL)
     return static_cast<Level>(static_cast<uint8_t>(pL) - 1);
 } // never called at Normal
 
-// Level a device's trigger corresponds to; nullopt for None and Heat (not level-driven).
+// Level a device's trigger corresponds to; nullopt for None.
 std::optional<Level> TriggerLevel(Trigger pT)
 {
     switch(pT)
@@ -53,22 +55,6 @@ void UpdateFault(State& pS, const Input& pIn, const Config& pCfg, Output& pOut)
         pS.fault = true;
         pS.ackUntilMs.reset(); // a new alarm: an earlier ack does not cover it
         pOut.events.push_back({EventType::FaultEnter});
-    }
-}
-
-void UpdateHeat(State& pS, const Input& pIn, const Config& pCfg, Output& pOut)
-{
-    if(!pIn.tempC.has_value()) return; // probe down: keep the last decision
-    const float t = *pIn.tempC;
-    if(!pS.heat && t >= pCfg.heatOnC)
-    {
-        pS.heat = true;
-        pOut.events.push_back({EventType::HeatOn});
-    }
-    else if(pS.heat && t <= pCfg.heatOffC)
-    {
-        pS.heat = false;
-        pOut.events.push_back({EventType::HeatOff});
     }
 }
 
@@ -157,9 +143,44 @@ void UpdateLevel(State& pS, const Input& pIn, const Config& pCfg, Output& pOut)
     }
 }
 
-// The level whose devices run: the readings' level or, during a FAULT, fault.level when that is deeper.
+// An alert suspend covers the alert it was started in: anything worse, a FAULT, the end of the alert or the
+// time running out ends it. It can only start during an alert, never in a FAULT.
+void UpdateSuspension(State& pS, const Input& pIn, Level pPrev, Output& pOut)
+{
+    std::optional<uint64_t>& until = pS.alertsSuspendedUntilMs;
+    if(until.has_value())
+    {
+        std::optional<ResumeReason> why;
+        if(pS.fault)
+            why = ResumeReason::Fault;
+        else if(pS.level == Level::Normal)
+            why = ResumeReason::Over;
+        else if(pS.level > pPrev)
+            why = ResumeReason::Deeper;
+        else if(pIn.nowMs >= *until)
+            why = ResumeReason::Time;
+        else if(pIn.suspendAlertsS == 0u)
+            why = ResumeReason::Hand;
+        if(why.has_value())
+        {
+            until.reset();
+            pOut.events.push_back({EventType::AlertResume, pS.level, pS.level, 0, static_cast<uint32_t>(*why)});
+        }
+    }
+    const uint32_t s = std::min(pIn.suspendAlertsS.value_or(0), ALERT_SUSPEND_MAX_S);
+    // Never in a FAULT or at Normal, and never in the sample the level went deeper: that alert was not seen.
+    if(s > 0 && !pS.fault && pS.level != Level::Normal && pS.level <= pPrev)
+    {
+        until = pIn.nowMs + Ms(s);
+        pOut.events.push_back({EventType::AlertSuspend, pS.level, pS.level, 0, s});
+    }
+}
+
+// The level whose devices run: the readings' level or, during a FAULT, fault.level when that is deeper; Normal
+// while the alert is suspended.
 Level DevicesLevel(const State& pS, const Config& pCfg)
 {
+    if(pS.alertsSuspendedUntilMs.has_value()) return Level::Normal;
     if(!pS.fault) return pS.level;
     const Level fl = pCfg.faultLevel < Level::Yellow ? Level::Yellow : pCfg.faultLevel;
     return fl > pS.level ? fl : pS.level;
@@ -170,16 +191,8 @@ void UpdateDevices(State& pS, const Input& pIn, const Config& pCfg, Level pAt, b
     for(std::size_t i = 0; i < DEVICES; ++i)
     {
         const DeviceConfig& dc = pCfg.devices[i];
-        bool active = false;
-        if(dc.trigger == Trigger::Heat)
-        {
-            active = pS.heat;
-        }
-        else
-        {
-            const std::optional<Level> tl = TriggerLevel(dc.trigger);
-            active = tl.has_value() && *tl <= pAt;
-        }
+        const std::optional<Level> tl = TriggerLevel(dc.trigger);
+        const bool active = tl.has_value() && *tl <= pAt;
 
         if(dc.mode == Mode::PulseOff)
         {
@@ -232,13 +245,15 @@ Output Step(State& pS, const Input& pIn, const Config& pCfg)
     Output out;
 
     UpdateFault(pS, pIn, pCfg, out);
-    UpdateHeat(pS, pIn, pCfg, out);
 
     const bool night = IsNight(pIn.minuteOfDay, pCfg);
     if(!night) pS.nightArmed = false;
 
+    const Level prev = pS.level;
     UpdateLevel(pS, pIn, pCfg, out);
     if(pCfg.nightLock && night && pS.level != Level::Normal) pS.nightArmed = true;
+    UpdateSuspension(pS, pIn, prev, out);
+    const bool suspended = pS.alertsSuspendedUntilMs.has_value();
 
     if(pIn.ackPressed)
     {
@@ -248,7 +263,7 @@ Output Step(State& pS, const Input& pIn, const Config& pCfg)
     bool silenced = pS.ackUntilMs.has_value() && pIn.nowMs < *pS.ackUntilMs;
 
     // By day an alarm may acknowledge itself once it has been heard, or not sound at all.
-    const bool alarm = (pS.level != Level::Normal || pS.fault) && !pIn.maintenance;
+    const bool alarm = (pS.level != Level::Normal || pS.fault) && !pIn.maintenance && !suspended;
     if(night || pCfg.dayAlarm != DayAlarm::AutoAck || !alarm || silenced)
     {
         pS.soundingSinceMs.reset();
@@ -273,7 +288,9 @@ Output Step(State& pS, const Input& pIn, const Config& pCfg)
     out.silenced = silenced;
     out.suppressed = suppressed;
     out.suspect = pS.suspect;
-    out.heat = pS.heat;
+    out.alertsSuspended = suspended;
+    out.alertsSuspendLeftS =
+        suspended ? static_cast<uint32_t>((*pS.alertsSuspendedUntilMs - pIn.nowMs + 999) / 1000) : 0;
     out.sound = alarm && !silenced && !suppressed;
     return out;
 }

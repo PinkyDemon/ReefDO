@@ -1,4 +1,9 @@
 dependencies:
   idf: ">=6.0"
   espressif/led_strip: "^3.0.0"
-  espressif/mdns: "^1.4.0"
+  espressif/mdns: "^1.9.0"
+  # The phone app (cloud_link.cpp): ESP RainMaker Neo, downloaded by cmake/neo_sdk.cmake, and its BLE
+  # provisioning for linking a board
+  esp_rmaker_neo:
+    path: ../external/esp-rainmaker-neo-firmware/components/esp_rmaker_neo
+  espressif/network_provisioning: "^1.0.5"

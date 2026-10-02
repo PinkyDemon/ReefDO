@@ -6,7 +6,7 @@
 
 #include <ArduinoJson.h>
 
-#include "slot_json.hpp"
+#include "reefdo/slot_json.hpp"
 
 namespace reefdo::config
 {
@@ -19,7 +19,7 @@ namespace
 {
 
 // Enum names, indexed by the enum's value (contiguous from 0): reading searches them, writing indexes them.
-constexpr const char* TRIGGER_NAMES[] = {"none", "blue", "yellow", "red", "heat"};
+constexpr const char* TRIGGER_NAMES[] = {"none", "blue", "yellow", "red"};
 constexpr const char* MODE_NAMES[] = {"on", "pulse_off"};
 constexpr const char* LEVEL_NAMES[] = {"normal", "blue", "yellow", "red"};
 constexpr const char* WIRED_NAMES[] = {"NO", "NC"}; // a 1.0 document's device-level wiring
@@ -567,10 +567,6 @@ LoadResult Load(std::string_view pJson, Config& pOut, const Config& pBase)
     r.Number(pulse, "s", "pulse.s", cfg.ladder.pulseS);
     r.Number(pulse, "min_interval_s", "pulse.min_interval_s", cfg.ladder.pulseMinIntervalS);
 
-    const JsonObjectConst heat = r.Object(root, "heat", "heat");
-    r.Number(heat, "on_c", "heat.on_c", cfg.ladder.heatOnC);
-    r.Number(heat, "off_c", "heat.off_c", cfg.ladder.heatOffC);
-
     const JsonObjectConst fault = r.Object(root, "fault", "fault");
     r.Number(fault, "consecutive_failures", "fault.consecutive_failures", cfg.ladder.faultConsecutiveFailures);
     r.Number(fault, "stuck_minutes", "fault.stuck_minutes", cfg.stuckMinutes);
@@ -598,7 +594,12 @@ LoadResult Load(std::string_view pJson, Config& pOut, const Config& pBase)
         r.Enumeration(d, "wired", p.of(prefix, "wired"), nc, WIRED_NAMES);
         slot::Relay* relay = cfg.devices[i].slot.AsRelay();
         if(!d["wired"].isNull() && relay != nullptr) relay->wiring = nc ? slot::Wiring::Nc : slot::Wiring::No;
-        r.Enumeration(d, "trigger", p.of(prefix, "trigger"), cfg.ladder.devices[i].trigger, TRIGGER_NAMES);
+        // Up to 1.1 a device could follow the water temperature ("heat"): such a device loads unassigned.
+        const JsonVariantConst trigger = d["trigger"];
+        if(trigger.is<const char*>() && std::strcmp(trigger.as<const char*>(), "heat") == 0)
+            cfg.ladder.devices[i].trigger = ladder::Trigger::None;
+        else
+            r.Enumeration(d, "trigger", p.of(prefix, "trigger"), cfg.ladder.devices[i].trigger, TRIGGER_NAMES);
         r.Enumeration(d, "mode", p.of(prefix, "mode"), cfg.ladder.devices[i].mode, MODE_NAMES);
         r.Flag(d, "ack_silences", p.of(prefix, "ack_silences"), cfg.ladder.devices[i].ackSilences);
         r.Number(d, d["test_s"].isNull() ? "service_s" : "test_s", p.of(prefix, "test_s"), cfg.test.devices[i].testS);
@@ -663,11 +664,6 @@ LoadResult Load(std::string_view pJson, Config& pOut, const Config& pBase)
         r.Number(o, "volume", p.of(prefix, "volume"), sg.volume);
     }
 
-    const JsonObjectConst ntfy = r.Object(root, "ntfy", "ntfy");
-    r.Flag(ntfy, "enabled", "ntfy.enabled", cfg.ntfy.enabled);
-    r.Text(ntfy, "topic", "ntfy.topic", cfg.ntfy.topic);
-    r.Enumeration(ntfy, "min_level", "ntfy.min_level", cfg.ntfy.minLevel, LEVEL_NAMES);
-
     if(!res.Ok()) return res;
     const LoadResult v = Validate(cfg);
     if(!v.Ok()) return v;
@@ -699,7 +695,6 @@ LoadResult Validate(const Config& pCfg)
         return Invalid("sudden_drop.slope_mgl_per_10min", "must be steeper than levels.blue.slope_mgl_per_10min");
     if(l.suddenExtendS > 3600) return Invalid("sudden_drop.extend_s", "must be 0..3600");
     if(l.recoverSustainS < 10) return Invalid("recover_sustain_s", "must be >= 10");
-    if(l.heatOnC <= l.heatOffC) return Invalid("heat", "on_c must be above off_c");
     if(l.nightStartMin == l.nightEndMin) return Invalid("night", "start and end must differ");
     if(l.faultConsecutiveFailures < 1) return Invalid("fault.consecutive_failures", "must be >= 1");
     if(l.faultLevel < Level::Yellow) return Invalid("fault.level", "FAULT must act as yellow or red");
@@ -793,8 +788,6 @@ LoadResult Validate(const Config& pCfg)
         if(all[i]->volume > 3) return Invalid(p.of(prefix, "volume"), "must be 0..3");
     }
 
-    if(pCfg.ntfy.enabled && pCfg.ntfy.topic.empty()) return Invalid("ntfy.topic", "required when ntfy is enabled");
-
     return {};
 }
 
@@ -830,10 +823,6 @@ std::size_t Write(const Config& pCfg, std::span<char> pOut, bool pRedact)
     JsonObject pulse = doc["pulse"].to<JsonObject>();
     pulse["s"] = l.pulseS;
     pulse["min_interval_s"] = l.pulseMinIntervalS;
-
-    JsonObject heat = doc["heat"].to<JsonObject>();
-    heat["on_c"] = l.heatOnC;
-    heat["off_c"] = l.heatOffC;
 
     JsonObject fault = doc["fault"].to<JsonObject>();
     fault["consecutive_failures"] = l.faultConsecutiveFailures;
@@ -910,11 +899,6 @@ std::size_t Write(const Config& pCfg, std::span<char> pOut, bool pRedact)
         o["buzzer"] = Name(all[i]->buzzer);
         o["volume"] = all[i]->volume;
     }
-
-    JsonObject ntfy = doc["ntfy"].to<JsonObject>();
-    ntfy["enabled"] = pCfg.ntfy.enabled;
-    ntfy["topic"] = pCfg.ntfy.topic.view();
-    ntfy["min_level"] = Name(pCfg.ntfy.minLevel);
 
     if(measureJson(doc) + 1 > pOut.size()) return 0;
     return serializeJson(doc, pOut.data(), pOut.size());

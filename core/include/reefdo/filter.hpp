@@ -36,6 +36,8 @@ public:
     void Push(uint64_t pTMs, float pV);
     void Reset();
     std::size_t Count() const { return mN; }
+    // Time from the oldest to the newest sample in the window; 0 with fewer than two.
+    uint64_t SpanMs() const;
 
     // Least-squares slope of the samples inside the window, in units per 10 minutes.
     // Negative = falling. 0 until at least two samples span MIN_SPAN_MS.

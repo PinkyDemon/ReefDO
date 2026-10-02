@@ -35,6 +35,7 @@ jobs:
           mkdir -p dist
           cp firmware/build/reefdo.bin            dist/reefdo-${GITHUB_REF_NAME}-ota.bin
           cp firmware/build/merged-binary.bin     dist/reefdo-${GITHUB_REF_NAME}-flash.bin
+          cp firmware/build/partition_table/partition-table.bin dist/reefdo-${GITHUB_REF_NAME}-partition-table.bin
           (cd dist && sha256sum *.bin > SHA256SUMS.txt)
           ls -l dist
 
@@ -45,4 +46,5 @@ jobs:
           pre=""; case "${GITHUB_REF_NAME}" in *-*) pre="--prerelease";; esac
           gh release create "${GITHUB_REF_NAME}" dist/* --title "ReefDO ${GITHUB_REF_NAME}" --generate-notes $pre \
             --notes "**reefdo-…-ota.bin** — upload on the Maintenance page (or POST to /api/ota) to update a running board.
-          **reefdo-…-flash.bin** — complete image for a new board: \`esptool --chip esp32s3 write-flash 0x0 reefdo-${GITHUB_REF_NAME}-flash.bin\`"
+          **reefdo-…-flash.bin** — complete image for a new board (overwrites the settings): \`esptool --chip esp32s3 write-flash 0x0 reefdo-${GITHUB_REF_NAME}-flash.bin\`
+          **reefdo-…-partition-table.bin** — the partition table alone, once for a board from before 1.1.0-rc4 that should link the phone app: \`esptool --chip esp32s3 write-flash 0x8000 reefdo-${GITHUB_REF_NAME}-partition-table.bin\`"

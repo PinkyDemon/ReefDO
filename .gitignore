@@ -70,6 +70,7 @@ Testing/
 
 # ReefDO
 out/
+reefdo-sim-data/
 CMakeUserPresets.json
 .vs/
 *.profraw
@@ -77,7 +78,9 @@ CMakeUserPresets.json
 
 # ESP-IDF (firmware/) — generated from sdkconfig.defaults and idf_component.yml
 firmware/build/
+firmware/build-*/
 firmware/managed_components/
+firmware/external/
 firmware/dependencies.lock
 firmware/sdkconfig
 firmware/sdkconfig.old

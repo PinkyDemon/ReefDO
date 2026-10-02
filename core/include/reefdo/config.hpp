@@ -41,14 +41,6 @@ struct DeviceSettings
     bool operator==(const DeviceSettings&) const = default;
 };
 
-struct NtfyConfig
-{
-    bool enabled = false;
-    FixedString<48> topic;
-    ladder::Level minLevel = ladder::Level::Blue;
-    bool operator==(const NtfyConfig&) const = default;
-};
-
 // How a state sounds. The ladder decides *whether* the buzzer may sound (Normal is silent, ack and maintenance mute);
 // these decide *how*. LED codes are fixed, only their brightness is configurable.
 enum class BuzzerPattern : uint8_t
@@ -93,7 +85,6 @@ struct Config
     ladder::Config ladder;
     std::array<DeviceSettings, DEVICES> devices;
     selftest::Config test;
-    NtfyConfig ntfy;
     SignalsConfig signals;
     boost::Config boost;
     bool operator==(const Config&) const = default;

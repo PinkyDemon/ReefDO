@@ -52,6 +52,7 @@ public:
     bool ReturnPumpStalled() const { return mStalled; }
     void SetDeviceK(std::size_t pI, float pKPerH) { mCfg.kDevicePerH[pI] = pKPerH; }
     void SetSat(float pSatPct) { mSat = pSatPct; }
+    void SetNightRespiration(float pPctPerH) { mCfg.respirationNightPctPerH = pPctPerH; }
 
 private:
     TankConfig mCfg;

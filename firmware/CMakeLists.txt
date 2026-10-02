@@ -13,4 +13,6 @@ file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/../core/include/reefdo/version.hpp" _ver
 string(REGEX MATCH "\"([^\"]+)\"" _ver_quoted "${_ver_line}")
 string(REPLACE "\"" "" PROJECT_VER "${_ver_quoted}")
 message(STATUS "ReefDO version ${PROJECT_VER}")
+
+include("${CMAKE_CURRENT_LIST_DIR}/cmake/neo_sdk.cmake") # before project(), which resolves main's path to it
 project(reefdo)

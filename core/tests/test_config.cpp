@@ -31,7 +31,6 @@ const char* sExample = R"({
   "recover_sustain_s": 600,
   "night": { "start": "21:00", "end": "08:00", "lock": false, "unknown_time_is_night": true },
   "pulse": { "s": 10, "min_interval_s": 1800 },
-  "heat": { "on_c": 28.0, "off_c": 27.5 },
   "fault": { "consecutive_failures": 5, "stuck_minutes": 30, "level": "yellow", "alert": true },
   "ack_silence_s": 1800,
   "devices": {
@@ -54,7 +53,6 @@ const char* sExample = R"({
   "correction": { "scale": 1.0, "offset": 0.0 },
   "salinity_psu": 35.0,
   "allow_zero_cal": false,
-  "ntfy": { "enabled": false, "topic": "", "min_level": "blue" },
   "signals": { "buzzer_hz": 2400, "led_brightness": 40,
                "normal": { "buzzer": "off", "volume": 0 },
                "blue":   { "buzzer": "off", "volume": 0 },
@@ -185,8 +183,6 @@ TEST_CASE("The example document loads into the expected fields", "[config]")
     REQUIRE(c.boost.devices[0]);
     REQUIRE_FALSE(c.boost.devices[1]);
     REQUIRE(c.correction.IsFactory());
-    REQUIRE(c.ntfy.minLevel == Level::Blue);
-    REQUIRE_FALSE(c.ntfy.enabled);
     REQUIRE(c.signals == SignalsConfig{}); // the example spells out the defaults
     REQUIRE(c.signals.of(Level::Normal, false) == c.signals.normal);
     REQUIRE(c.signals.of(Level::Blue, false) == c.signals.blue);
@@ -250,9 +246,6 @@ TEST_CASE("Every wrong-type and bad-value path reports its dotted key", "[config
         {R"({"devices":{"1":{"name": 5}}})", LoadError::WrongType, "devices.1.name"},
         {R"({"devices":{"1":{"name": "a name that is far longer than twenty-four"}}})", LoadError::BadValue,
          "devices.1.name"},
-        {R"({"ntfy":{"topic": 7}})", LoadError::WrongType, "ntfy.topic"},
-        {R"({"ntfy":{"topic": "0123456789012345678901234567890123456789012345678"}})", LoadError::BadValue,
-         "ntfy.topic"},
         {R"({"night":{"start": 2100}})", LoadError::WrongType, "night.start"},
         {R"({"night":{"start": "25:00"}})", LoadError::BadValue, "night.start"},
         {R"({"night":{"day_alarm": "mute"}})", LoadError::BadValue, "night.day_alarm"},
@@ -319,7 +312,6 @@ TEST_CASE("Every validation rule fires on its own key", "[config]")
         {"sudden_drop.slope_mgl_per_10min", [](Config& pC) { pC.ladder.blueSlopeMglPer10min = 3.0f; }},
         {"sudden_drop.extend_s", [](Config& pC) { pC.ladder.suddenExtendS = 3601; }},
         {"recover_sustain_s", [](Config& pC) { pC.ladder.recoverSustainS = 5; }},
-        {"heat", [](Config& pC) { pC.ladder.heatOffC = 28.0f; }},
         {"night", [](Config& pC) { pC.ladder.nightEndMin = pC.ladder.nightStartMin; }},
         {"fault.consecutive_failures", [](Config& pC) { pC.ladder.faultConsecutiveFailures = 0; }},
         {"fault.level", [](Config& pC) { pC.ladder.faultLevel = Level::Blue; }},
@@ -361,8 +353,7 @@ TEST_CASE("Every validation rule fires on its own key", "[config]")
          {
              pC.test.devices[0].testS = 3600;
              pC.test.devices[1].testS = 3600;
-         }},                                                        // 7500 s + gaps > 90 min
-        {"ntfy.topic", [](Config& pC) { pC.ntfy.enabled = true; }}, // topic empty
+         }}, // 7500 s + gaps > 90 min
         {"signals.buzzer_hz", [](Config& pC) { pC.signals.buzzerHz = 100; }},
         {"signals.buzzer_hz", [](Config& pC) { pC.signals.buzzerHz = 9000; }},
         {"signals.led_brightness", [](Config& pC) { pC.signals.ledBrightness = 101; }},
@@ -410,22 +401,17 @@ TEST_CASE("Test window with the deficit run and a single tested device still has
     REQUIRE(Validate(c).Ok());
 }
 
-TEST_CASE("Enabled ntfy with a topic passes; every enum name round-trips", "[config]")
+TEST_CASE("Every enum name round-trips", "[config]")
 {
     Config c = Example();
-    c.ntfy.enabled = true;
-    REQUIRE(c.ntfy.topic.assign("reef-secret-topic"));
-    c.ntfy.minLevel = Level::Red;
     c.ladder.faultLevel = Level::Red;
-    c.ladder.devices[5].trigger = Trigger::Heat;
     c.ladder.devices[5].trigger = Trigger::Red;
-    c.ladder.devices[1].trigger = Trigger::Heat;
     c.ladder.faultAlert = false;
     Config back;
     REQUIRE(Load(Dump(c), back).Ok());
     REQUIRE(back == c);
-    REQUIRE(Dump(c).find("\"min_level\":\"red\"") != std::string::npos);
-    REQUIRE(Dump(c).find("\"trigger\":\"heat\"") != std::string::npos);
+    REQUIRE(Dump(c).find("\"level\":\"red\"") != std::string::npos);
+    REQUIRE(Dump(c).find("\"trigger\":\"red\"") != std::string::npos);
 
     // Every signal name survives a round trip.
     const BuzzerPattern buzzers[] = {BuzzerPattern::Off,    BuzzerPattern::Chirp,  BuzzerPattern::Beep,
@@ -599,7 +585,6 @@ TEST_CASE("The largest possible configuration still fits DOC_MAX, the firmware's
         t.version = reefdo::tuya::Version::V35;
         d.slot = t;
     }
-    c.ntfy.topic.assign("012345678901234567890123456789012345678901234567");
     std::vector<char> buf(DOC_MAX);
     REQUIRE(Write(c, buf) > 0);
 }
@@ -890,4 +875,18 @@ TEST_CASE("The document stored on a 1.0 board loads unchanged: relays 1..6, the 
     Config back; // and what 1.1 writes back loads to the same thing
     REQUIRE(Load(Dump(c), back).Ok());
     REQUIRE(back == c);
+    REQUIRE(Dump(c).find("ntfy") == std::string::npos); // its ntfy block is ignored and not written back
+}
+
+TEST_CASE("A device on the heat trigger of 1.1 loads unassigned; the heat block is ignored", "[config]")
+{
+    Config c;
+    const LoadResult r =
+        Load(R"({"heat":{"on_c":28,"off_c":27.5},"devices":{"6":{"trigger":"heat"},"2":{"trigger":"blue"}}})", c);
+    INFO(r.path.view() << ": " << r.message.view());
+    REQUIRE(r.Ok());
+    REQUIRE(c.ladder.devices[5].trigger == Trigger::None);
+    REQUIRE(c.ladder.devices[1].trigger == Trigger::Blue);
+    REQUIRE(Dump(c).find("heat") == std::string::npos);
+    REQUIRE(Load(R"({"devices":{"6":{"trigger":"warm"}}})", c).error == LoadError::BadValue); // still strict
 }

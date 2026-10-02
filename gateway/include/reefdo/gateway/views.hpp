@@ -1,6 +1,6 @@
 #pragma once
-// The web UI's contract, without the web. The HTTP handlers only parse the URL, call these,
-// and stream what comes back. JSON documents are built into caller buffers; bulk data is CSV through a sink.
+// The gateway's views: what every transport (HTTP, console, cloud) reads from and does to the App, without
+// the transport. JSON documents are built into caller buffers; bulk data is CSV through a sink.
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -10,7 +10,7 @@
 #include "reefdo/app.hpp"
 #include "reefdo/config.hpp"
 
-namespace reefdo::api
+namespace reefdo::gateway
 {
 
 // Streaming output for CSV. Return false to stop (the client went away).
@@ -31,7 +31,8 @@ std::size_t TestJson(const app::App& pApp, std::span<char> pOut);
 config::LoadResult ApplyConfig(app::App& pApp, std::string_view pJson, const app::Clock& pClock);
 std::size_t ResultJson(const config::LoadResult& pR, std::span<char> pOut);
 
-// POST /api/cmd, one command per document: {"ack":true} · {"maintenance":b} · {"test":"run"} · {"cal":"air"}
+// POST /api/cmd, one command per document: {"ack":true} · {"suspend_alerts":{"s":n}} (0 resumes) · {"maintenance":b}
+// · {"test":"run"} · {"cal":"air"}
 // · {"suspend":{"device":n,"s":n}} · {"manual":{"device":n,"on":b|null}} · {"clear":{"device":n}} (a failed test
 // verdict; n = the device number, 1..DEVICES)
 // · {"time":{"unix":s,"tz":s}}
@@ -53,4 +54,4 @@ std::size_t EventsCsv(const app::App& pApp, uint32_t pSinceSeq, ISink& pSink);
 std::size_t SeriesCsv(const app::App& pApp, char pTier, uint32_t pFromTs, uint32_t pToTs, uint32_t pEvery,
                       ISink& pSink);
 
-} // namespace reefdo::api
+} // namespace reefdo::gateway

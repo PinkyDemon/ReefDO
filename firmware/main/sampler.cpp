@@ -6,9 +6,10 @@
 
 #include <sys/time.h>
 
-#include "reefdo/api.hpp"
+#include "reefdo/gateway/views.hpp"
 
 #include "board.hpp"
+#include "cloud_link.hpp"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_system.h"
@@ -19,7 +20,7 @@
 #include "freertos/task.h"
 #include "hal/flash_store.hpp"
 #include "hal/nvs_store.hpp"
-#include "notify.hpp"
+#include "sdkconfig.h"
 
 namespace sampler
 {
@@ -74,7 +75,11 @@ struct Host
     hal::Rs485Uart uart;
     std::optional<reefdo::probe::Rk500> rk500;
     std::optional<reefdo::app::App> app;
+#if CONFIG_REEFDO_QEMU
+    ProbeSource source = ProbeSource::Sim; // QEMU has no probe: the virtual tank
+#else
     ProbeSource source = ProbeSource::Rk500; // the real probe unless NVS says otherwise
+#endif
     int32_t tz = 0;
     Indication ind;
     bool hung = false;
@@ -244,11 +249,10 @@ void TickLocked()
     sHost.ind.chirps += s.chirp ? 1u : 0u;
     sHost.ind.signals = sHost.app->GetConfig().signals;
 
-    for(const reefdo::app::Notification& n : sHost.app->TakeNotifications())
-    {
+    const reefdo::app::Notifications notes = sHost.app->TakeNotifications();
+    for(const reefdo::app::Notification& n : notes)
         LogNotification(n);
-        notify::Push(n, sHost.cfg);
-    }
+    cloud_link::OnSample(*sHost.app, c, std::span<const reefdo::app::Notification>(notes.begin(), notes.size()));
     if(sHost.app->TestPersistentChanged()) SaveTest();
     MarkImageValid(s);
 }
@@ -333,7 +337,7 @@ hal::Rs485Uart& Uart()
 bool ApplyConfigJson(std::string_view pJson, reefdo::config::LoadResult& pOut)
 {
     Guard guard;
-    pOut = reefdo::api::ApplyConfig(*sHost.app, pJson, ClockNow());
+    pOut = reefdo::gateway::ApplyConfig(*sHost.app, pJson, ClockNow());
     if(!pOut.Ok()) return false;
     sHost.cfg = sHost.app->GetConfig();
     if(sHost.rk500) sHost.rk500->SetConfig(ProbeConfig()); // stuck_minutes, sample_period_s, allow_zero_cal

@@ -25,8 +25,7 @@ enum class Trigger : uint8_t
     None,
     Blue,
     Yellow,
-    Red,
-    Heat
+    Red
 };
 enum class Mode : uint8_t
 {
@@ -41,6 +40,17 @@ enum class DayAlarm : uint8_t
     Suppress // silent, the alarm devices too; the level, its devices and the pushes are unchanged
 };
 constexpr uint32_t DAY_ACK_AFTER_S = 10;
+constexpr uint32_t ALERT_SUSPEND_MAX_S = 3600; // an alert suspend lasts at most this long
+
+// Why an alert suspend ended (Event::detail of AlertResume).
+enum class ResumeReason : uint8_t
+{
+    Time,   // its time ran out
+    Deeper, // the level went deeper
+    Fault,  // the probe failed: nothing is being watched
+    Over,   // back to Normal: the alert it suspended is over
+    Hand
+};
 
 struct DeviceConfig
 {
@@ -75,8 +85,6 @@ struct Config
     Level faultLevel = Level::Red; // FAULT runs this level's devices; never shallower than Yellow (FAULT is loud)
     uint32_t pulseS = 10;
     uint32_t pulseMinIntervalS = 1800;
-    float heatOnC = 28.0f;
-    float heatOffC = 27.5f;
     bool nightLock = false;           // once Blue+ triggers at night, hold at least Blue until night_end
     uint16_t nightStartMin = 21 * 60; // minutes after local midnight
     uint16_t nightEndMin = 8 * 60;
@@ -92,11 +100,12 @@ struct Input
 {
     std::optional<float> doMgl; // corrected mg/L (Correction::apply); nullopt: the probe failed this tick
     float slopeMglPer10min = 0.0f;
-    float fastSlopeMglPer10min = 0.0f; // over the last 2 min: sudden-drop detection
-    std::optional<float> tempC;
+    float fastSlopeMglPer10min = 0.0f;   // over the last 2 min: sudden-drop detection
     uint64_t nowMs = 0;                  // monotonic
     std::optional<uint16_t> minuteOfDay; // local time; nullopt until the clock is known
     bool ackPressed = false;
+    // A command this tick: > 0 suspends the current alert for so long (again: restarts it), 0 resumes.
+    std::optional<uint32_t> suspendAlertsS;
     bool maintenance = false;
 };
 
@@ -107,12 +116,14 @@ enum class EventType : uint8_t
     FaultEnter,
     FaultClear,
     Ack,
-    Pulse, // device pulsed off
-    HeatOn,
-    HeatOff,
-    AutoAck,     // day_alarm auto_ack
-    SuddenDrop,  // a suspect fall: dwells extended
-    SuddenClear, // back above every entry threshold: dwells normal again
+    Pulse,        // device pulsed off
+    HeatOn,       // up to 1.1 only (the heat trigger); kept so the logged codes keep their meaning
+    HeatOff,      // up to 1.1 only
+    AutoAck,      // day_alarm auto_ack
+    SuddenDrop,   // a suspect fall: dwells extended
+    SuddenClear,  // back above every entry threshold: dwells normal again
+    AlertSuspend, // the alert-driven devices and the alarm back to Normal for a while; detail = seconds
+    AlertResume,  // detail = ResumeReason
 };
 
 struct Event
@@ -121,18 +132,20 @@ struct Event
     Level from = Level::Normal;
     Level to = Level::Normal;
     uint8_t device = 0;
+    uint32_t detail = 0; // AlertSuspend: seconds; AlertResume: ResumeReason
 };
 
 struct Output
 {
-    Level level = Level::Normal; // what the readings support; frozen while the probe fails
-    bool fault = false;          // the probe failed: fault.level's devices run (if deeper), fault signal
-    bool silenced = false;       // Ack in effect
-    bool suppressed = false;     // day_alarm suppress in effect
-    bool suspect = false;        // a sudden drop: dwells extended
-    bool heat = false;
+    Level level = Level::Normal;  // what the readings support; frozen while the probe fails
+    bool fault = false;           // the probe failed: fault.level's devices run (if deeper), fault signal
+    bool silenced = false;        // Ack in effect
+    bool suppressed = false;      // day_alarm suppress in effect
+    bool suspect = false;         // a sudden drop: dwells extended
+    bool alertsSuspended = false; // alert-driven devices and the alarm as at Normal; the level stays real
+    uint32_t alertsSuspendLeftS = 0;
     std::array<bool, DEVICES> deviceOn{}; // semantic "powered"; NO/NC polarity is applied by the caller
-    bool sound = false; // the alarm may sound: an alert or FAULT, not silenced or suppressed, not in maintenance
+    bool sound = false; // the alarm may sound: an alert or FAULT, not silenced, suppressed, suspended or in maintenance
     FixedVector<Event, DEVICES + 8> events; // a pulse per device at most, plus the level events
 };
 
@@ -153,8 +166,8 @@ struct State
     std::optional<uint64_t> aboveSinceMs;
     std::optional<uint64_t> ackUntilMs;
     std::optional<uint64_t> soundingSinceMs; // day auto_ack: the unacknowledged alarm sounds since
+    std::optional<uint64_t> alertsSuspendedUntilMs;
     bool suspect = false;
-    bool heat = false;
     bool nightArmed = false;
     std::array<PulseState, DEVICES> pulse{};
 };

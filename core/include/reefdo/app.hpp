@@ -33,7 +33,7 @@ enum class Link : uint8_t
 // Why a device is on (Status::deviceWhy). Any bit keeps it on; only a suspension turns it off regardless.
 enum Demand : uint8_t
 {
-    DEMAND_LADDER = 1, // its level (or heat), or a pulse device's normal power
+    DEMAND_LADDER = 1, // its level, or a pulse device's normal power
     DEMAND_TEST = 2,
     DEMAND_BOOST = 4,
     DEMAND_WINDOW = 8,
@@ -87,10 +87,11 @@ enum MeasurementFlag : uint16_t
     FLAG_MAINTENANCE = 2,
     FLAG_SILENCED = 4,
     FLAG_TEST_RUNNING = 8,
-    FLAG_HEAT = 16,
+    FLAG_HEAT = 16, // up to 1.1 only (the heat trigger); never set now
     FLAG_CLOCK_UNKNOWN = 32,
-    FLAG_SUSPENDED = 64, // a device is out of order (device maintenance)
-    FLAG_SUSPECT = 128,  // a sudden drop: the ladder's dwells are extended
+    FLAG_SUSPENDED = 64,         // a device is out of order (device maintenance)
+    FLAG_SUSPECT = 128,          // a sudden drop: the ladder's dwells are extended
+    FLAG_ALERTS_SUSPENDED = 256, // an alert suspend: alert-driven devices and the alarm as at Normal
 };
 
 // Command records: aux = 1 maintenance on, 2 maintenance off (f1 = 0 command, 1 time ran out), 3 air calibration
@@ -102,7 +103,8 @@ enum MeasurementFlag : uint16_t
 // Test records: aux = event type | device << 8 | outcome << 16 | skip << 24, flags = judged 1 | clock unknown 2
 //   | aborted 4 | high DO 8 (a missed response let off: f1 = DO at the device's start, f2 = the limit)
 // Ladder event records: aux = ladder::EventType, flags = from | to << 8, aux device in bits 8..15 for Pulse,
-//   f0 = DO; SuddenDrop: f1 = the 2 min slope (mg/L per 10 min)
+//   f0 = DO; SuddenDrop: f1 = the 2 min slope (mg/L per 10 min); AlertSuspend: f1 = seconds; AlertResume: f1 =
+//   ladder::ResumeReason
 
 struct Status
 {
@@ -116,9 +118,10 @@ struct Status
     ladder::Level level = ladder::Level::Normal;
     bool fault = false;
     bool silenced = false;
-    bool suppressed = false; // day_alarm suppress in effect
-    bool suspect = false;    // a sudden drop: dwells extended
-    bool heat = false;
+    bool suppressed = false;      // day_alarm suppress in effect
+    bool suspect = false;         // a sudden drop: dwells extended
+    bool alertsSuspended = false; // the current alert suspended (App::SuspendAlerts)
+    uint32_t alertsSuspendLeftS = 0;
     bool maintenance = false;
     uint32_t maintenanceLeftS = 0;                     // until maintenance mode ends by itself
     std::array<bool, DEVICES> deviceOn{};              // semantic "powered"
@@ -153,6 +156,11 @@ public:
 
     // Commands (from the console, the web UI, the button)
     void Ack();
+    // Alert suspend: the alert-driven devices and the alarm act as at Normal for 1..ladder::ALERT_SUSPEND_MAX_S
+    // seconds; 0 resumes. Only during an alert, never in a FAULT; a deeper level, a FAULT or the alert ending
+    // resumes by itself. Applied at the next tick, like Ack. pSeen: the level the person saw when they asked (a phone
+    // may show an older one); refused if it is deeper now.
+    bool SuspendAlerts(uint32_t pSeconds, std::optional<ladder::Level> pSeen = std::nullopt);
     // ReefDO maintenance mode, for MAINTENANCE_S; entering it again restarts the countdown.
     void SetMaintenance(bool pOn, const Clock& pClock);
     void RunTest();
@@ -248,6 +256,7 @@ private:
     std::array<std::optional<bool>, DEVICES> mManual{};
     std::array<uint32_t, DEVICES> mTuyaFails{};
     bool mAckPending = false;
+    std::optional<uint32_t> mSuspendAlertsPending;
     bool mRunTestPending = false;
     bool mStarted = false;
     uint64_t mBootMs = 0;

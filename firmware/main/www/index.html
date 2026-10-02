@@ -77,7 +77,7 @@ section.on{display:block}
 .seg button[disabled]{opacity:.45;cursor:not-allowed}
 .tag{font-size:11px;padding:1px 7px;border-radius:999px;font-weight:600;text-transform:uppercase;letter-spacing:.05em}
 .tag.blue{background:var(--blue-bg);color:var(--blue)} .tag.yellow{background:var(--yellow-bg);color:var(--yellow)}
-.tag.red{background:var(--red-bg);color:var(--red)} .tag.heat{background:var(--purple-bg);color:var(--purple)} .tag.none{background:var(--line);color:var(--muted)}
+.tag.red{background:var(--red-bg);color:var(--red)} .tag.fault{background:var(--purple-bg);color:var(--purple)} .tag.none{background:var(--line);color:var(--muted)}
 table{width:100%;border-collapse:collapse;font-size:14px}
 th{text-align:left;color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.06em;padding:8px 8px;border-bottom:1px solid var(--line)}
 td{padding:8px;border-bottom:1px solid var(--line);vertical-align:top;font-variant-numeric:tabular-nums}
@@ -150,10 +150,6 @@ h2{font-size:16px;margin:18px 0 10px}
     <div class="card">
       <h3>Temperature</h3>
       <div class="big" id="temp-big">—<small>°C</small></div>
-      <div class="kv" style="margin-top:8px">
-        <b>heat trigger</b><span id="heat-th">—</span>
-        <b>heat</b><span id="heat-st">—</span>
-      </div>
     </div>
     <div class="card">
       <h3>Level</h3>
@@ -167,6 +163,11 @@ h2{font-size:16px;margin:18px 0 10px}
       <div class="row" style="margin-top:10px">
         <button class="btn" id="ackbtn" onclick="ack()">Acknowledge</button>
         <span class="muted" style="font-size:13px" id="acknote"></span>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button class="btn" id="suspbtn" onclick="suspendAlerts()">Suspend alert</button>
+        <select id="susp-min" title="How long; a deeper level, a FAULT or the end of the alert resumes it earlier"><option value="5">5 min</option><option value="15">15 min</option><option value="30" selected>30 min</option><option value="60">60 min</option></select>
+        <span class="muted" style="font-size:13px" id="suspnote"></span>
       </div>
     </div>
     <div class="card">
@@ -189,7 +190,7 @@ h2{font-size:16px;margin:18px 0 10px}
       <b>uptime</b><span id="sys-up">—</span>  <b>firmware</b><span id="sys-fw">—</span>
       <b>WiFi</b><span id="sys-wifi">—</span> <b>time</b><span id="sys-time">—</span>
       <b>log A</b><span id="sys-loga">—</span> <b>log B / E / D</b><span id="sys-logb">—</span>
-      <b>next seq</b><span class="mono" id="sys-seq">—</span> <b>push</b><span id="sys-push">—</span>
+      <b>next seq</b><span class="mono" id="sys-seq">—</span> <b>phone app</b><span id="sys-cloud">—</span>
     </div>
   </div>
 </section>
@@ -301,9 +302,6 @@ h2{font-size:16px;margin:18px 0 10px}
       <div class="row"><label class="c"><input type="checkbox" data-k="night.unknown_time_is_night"> unknown clock counts as night</label></div>
       <div class="form" style="margin-top:8px"><label class="f">alarms by day <select data-k="night.day_alarm"><option value="sound">sound</option><option value="auto_ack">acknowledge after 10 s</option><option value="suppress">silent</option></select></label></div>
     </div>
-    <div class="card"><h3>Heat</h3>
-      <div class="form"><label class="f">on above (°C) <input data-k="heat.on_c"></label><label class="f">off below (°C) <input data-k="heat.off_c"></label></div>
-    </div>
     <div class="card"><h3>Probe &amp; fault</h3>
       <div class="form">
         <label class="f">sample period (s) <input data-k="sample_period_s"></label>
@@ -346,13 +344,6 @@ h2{font-size:16px;margin:18px 0 10px}
     </div>
     <div class="row" style="margin-top:10px"><button class="btn" onclick="buzzerTest()">Play</button><span class="note" style="margin:0">Plays even while the buzzer is muted. Pick what you like, then set it per state above.</span></div>
     <div class="row" style="margin-top:10px"><label class="c" title="Silences every alarm tone until switched back. Devices, LED and notifications keep working. For bench work only — a muted failsafe cannot wake you."><input type="checkbox" id="mute-toggle" onchange="setMute(this.checked)"> mute the buzzer (all alarms silent)</label></div>
-  </div>
-
-  <div class="card">
-    <h3>Push · ntfy</h3>
-    <div class="row"><label class="c"><input type="checkbox" data-k="ntfy.enabled"> enabled</label></div>
-    <div class="form" style="margin-top:8px"><label class="f">topic <input data-k="ntfy.topic" placeholder="random-32-char-topic"></label><label class="f">push from <select data-k="ntfy.min_level"><option>blue</option><option>yellow</option><option>red</option></select></label></div>
-    <div class="row" style="margin-top:8px"><button class="btn" onclick="ntfyTest()">Send test</button><span class="note" style="margin:0">One HTTPS POST per event. Nothing here is needed for the ladder.</span></div>
   </div>
 
   <div class="card">
@@ -419,6 +410,12 @@ h2{font-size:16px;margin:18px 0 10px}
       <div class="row" style="margin-top:8px"><button class="btn primary" onclick="saveWifi()">Save &amp; connect</button></div>
       <div class="note">If the router is unreachable for 2 min the board raises its own open network <b>reefdo-setup</b>; this page is at http://192.168.4.1/ there.</div>
     </div>
+    <div class="card"><h3>Phone app</h3>
+      <div class="kv" style="margin-bottom:8px"><b>state</b><span id="cloud-state">—</span></div>
+      <div class="row"><button class="btn" id="cloud-link-btn" onclick="cloudLink()">Link to the phone app</button></div>
+      <div class="kv" id="cloud-code" style="margin-top:8px" hidden><b>device</b><span class="mono" id="cloud-service"></span><b>code</b><span class="mono" id="cloud-pop"></span></div>
+      <div class="note">In the <b>ESP RainMaker Home</b> app: add device, pick the device named here and type the code; the board listens over Bluetooth for up to 10 minutes and is off Wi-Fi meanwhile (this page stops answering; the relays, the ladder and the buzzer carry on). The app then shows DO, the level and a chart, pushes alarms, and can acknowledge or suspend an alert — nothing else. The board never depends on it.</div>
+    </div>
     <div class="card"><h3>Web password</h3>
       <div class="form"><label class="f">user <input value="reef" disabled></label><label class="f">new password <input type="password" id="pw-new"></label></div>
       <div class="row" style="margin-top:8px"><button class="btn" onclick="savePassword()">Change</button></div>
@@ -478,7 +475,7 @@ function pill(el,s){
   const maint=s.ladder.maintenance, fault=s.ladder.fault, lv=s.ladder.level;
   el.className='pill '+(maint?'lv-maint':fault?'lv-fault':'lv-'+lv);
   const alarm=lv!=='normal'||fault;
-  el.innerHTML='<span class="dot"></span>'+(maint?'MAINTENANCE · '+fmtLeft(s.ladder.maintenance_s):fault?'FAULT':lv.toUpperCase())+(s.ladder.silenced?' · silenced':alarm&&s.ladder.suppressed?' · silent by day':'')+(s.ladder.suspect?' · sudden drop':'');
+  el.innerHTML='<span class="dot"></span>'+(maint?'MAINTENANCE · '+fmtLeft(s.ladder.maintenance_s):fault?'FAULT':lv.toUpperCase())+(s.ladder.silenced?' · silenced':alarm&&s.ladder.suppressed?' · silent by day':'')+(s.ladder.suspect?' · sudden drop':'')+(s.ladder.alerts_suspended?' · alert suspended '+fmtLeft(s.ladder.alerts_suspend_s):'');
 }
 function fmtLeft(s){ return s>=3600?Math.floor(s/3600)+' h '+String(Math.floor(s%3600/60)).padStart(2,'0')+' min':Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
 function devCard(d,i){
@@ -517,12 +514,13 @@ async function refresh(){
   $('do-slope').textContent=(p.slope>=0?'+':'')+p.slope.toFixed(2)+' mg/L / 10 min';
   $('do-probe').textContent=p.status+(p.failures?' · '+p.failures+' failures':'');
   $('temp-big').innerHTML=(p.temp==null?'—':p.temp.toFixed(1))+'<small>°C</small>';
-  $('heat-st').textContent=l.heat?'ON':'off';
   $('th-blue').textContent='< '+l.enters_below.blue.toFixed(2)+' · leaves > '+l.leaves_above.blue.toFixed(2);
   $('th-yellow').textContent='< '+l.enters_below.yellow.toFixed(2)+' · leaves > '+l.leaves_above.yellow.toFixed(2);
   $('th-red').textContent='< '+l.enters_below.red.toFixed(2)+' · leaves > '+l.leaves_above.red.toFixed(2);
   const alarm=l.level!=='normal'||l.fault;
   $('ackbtn').disabled=!alarm||l.silenced; $('acknote').textContent=alarm?(l.silenced?'silenced':l.suppressed?'silent by day (alarms by day: silent)':'silences the buzzer and ack devices for a while; the level stays'):'nothing to acknowledge';
+  const susp=l.alerts_suspended; $('suspbtn').textContent=susp?'Resume alert':'Suspend alert'; $('suspbtn').disabled=!susp&&(l.level==='normal'||l.fault); $('susp-min').hidden=susp;
+  $('suspnote').textContent=susp?('its devices and alarm as at Normal for '+fmtLeft(l.alerts_suspend_s)+' · a deeper level, a FAULT or the end of the alert resumes it'):l.fault?'not during a FAULT':l.level==='normal'?'nothing to suspend':'a false alarm? its devices and alarm back to Normal for a while; the level stays';
   $('svc-window').textContent=s.test.window_start+' – '+s.test.window_end;
   $('svc-state').textContent=s.test.running?('running · device '+s.test.device+' · '+s.test.phase):'idle'+(s.test.inconclusive_alert?' · inconclusive streak':'')+(s.test.exclusive?'':' · checks off (not exclusive)');
   $('boost-state').textContent=s.boost.enabled?(s.boost.window_start+' – '+s.boost.window_end+' · to '+s.boost.target_mgl.toFixed(2)+' mg/L'+(s.boost.running?' · running':'')):'off';
@@ -539,7 +537,7 @@ async function refresh(){
   document.querySelectorAll('.maint-only').forEach(b=>b.disabled=!maint);
   $('maintbtn').textContent=maint?'Leave maintenance ('+fmtLeft(l.maintenance_s)+' left)':'Enter maintenance';
   if(!window._pushedTime && (!s.clock_known || (AUTH && s.tz!==tzHere()))){ window._pushedTime=true; pushTime(true); }
-  if(CFG){ $('heat-th').textContent=CFG.heat.on_c+' on / '+CFG.heat.off_c+' off'; $('nightlock').textContent=CFG.night.lock?'on · '+CFG.night.start+'–'+CFG.night.end:'off'; }
+  if(CFG){ $('nightlock').textContent=CFG.night.lock?'on · '+CFG.night.start+'–'+CFG.night.end:'off'; }
 }
 async function refreshWifi(){
   try{ WIFI=await getJ('/api/sys'); }catch(e){ return; }
@@ -547,11 +545,12 @@ async function refreshWifi(){
   $('wifi').textContent='📶 '+(w.connected?w.rssi+' dBm':w.ap?'setup AP':'—');
   $('sys-wifi').textContent=w.connected?w.ssid+' · '+w.rssi+' dBm · '+w.ip:(w.ap?'setup AP reefdo-setup (192.168.4.1)':'connecting to '+w.ssid);
   $('simbadge').hidden=w.probe!=='sim';
+  $('sys-cloud').textContent=(w.cloud||'off')+(w.cloud_pushes?' · '+w.cloud_pushes+' pushes':'');
+  $('cloud-state').textContent=w.cloud||'off'; $('cloud-link-btn').disabled=w.cloud!=='not linked'&&w.cloud!=='linking';
   $('mutebadge').hidden=!w.muted; $('mute-toggle').checked=!!w.muted;
-  $('cfgwarn').hidden=!w.config||w.config==='stored'; $('cfgwarn').textContent=w.config==='defaults'?'Factory defaults are active: no device is assigned yet. Set the devices on the Config page and Save.':'The stored configuration was '+w.config+' — the board runs on factory defaults until you Save a valid one.';
-  $('sys-push').textContent=CFG&&CFG.ntfy.enabled?('sent '+w.ntfy_sent+' · failed '+w.ntfy_failed):'off';
-}
+  $('cfgwarn').hidden=!w.config||w.config==='stored'; $('cfgwarn').textContent=w.config==='defaults'?'Factory defaults are active: no device is assigned yet. Set the devices on the Config page and Save.':'The stored configuration was '+w.config+' — the board runs on factory defaults until you Save a valid one.';}
 function ack(){ cmd({ack:true},'Acknowledged'); }
+function suspendAlerts(){ if(ST&&ST.ladder.alerts_suspended) cmd({suspend_alerts:{s:0}},'Alert resumed'); else cmd({suspend_alerts:{s:+$('susp-min').value*60,level:ST?ST.ladder.level:'red'}},'Alert suspended'); }
 async function setMute(pOn){ try{ const r=await sendForm('/api/mute',{muted:pOn?1:0}); toast(r.ok?(r.muted?'Buzzer muted':'Buzzer live'):'Rejected'); }catch(e){ toast('Failed: '+e.message); } refreshWifi(); }
 async function toggleMaint(){ const on=!(ST&&ST.ladder.maintenance); await cmd({maintenance:on},on?'Maintenance mode for 30 min — buzzer muted':'Back to normal operation'); }
 async function pushTime(quiet){ try{ await sendJ('/api/cmd',{time:{unix:Math.floor(Date.now()/1000),tz:tzHere()}}); if(!quiet) toast('Board clock set from this browser'); refresh(); }catch(e){ if(!quiet) toast('Failed: '+e.message); } }
@@ -561,14 +560,33 @@ let range='24h';
 $('range').addEventListener('click',e=>{ if(e.target.dataset.r){ range=e.target.dataset.r; document.querySelectorAll('#range button').forEach(b=>b.classList.toggle('on',b===e.target)); drawChart(); }});
 $('showtemp').addEventListener('change',drawChart);
 window.addEventListener('resize',()=>{ if($('chart').classList.contains('on')) drawChart(); });
-const cache={};
-async function drawChart(){
+// Each draw has a number; after every wait a draw that is no longer the newest stops, and the newest cancels the
+// older one's download, so a slow 24 h load cannot paint its markers over the 1 h chart.
+const cache={}; // range → {unix, data}: switching back within a minute does not load again
+let chartGen=0, chartAbort=null, chartLoading=false;
+async function drawChart(fresh){
+  const gen=++chartGen;
+  if(chartAbort) chartAbort.abort();
+  chartAbort=new AbortController();
+  const signal=chartAbort.signal;
+  chartLoading=true;
+  try{ await drawChartNow(gen,signal,fresh===true); }finally{ if(gen===chartGen) chartLoading=false; }
+}
+async function drawChartNow(gen,signal,fresh){
   if(!CFG) await loadConfig(true);
+  if(gen!==chartGen) return;
   if(!ST||!ST.clock_known){ toast('The board has no clock yet: no chart'); return; }
   const days=range==='1h'?1/24:range==='6h'?0.25:range==='12h'?0.5:range==='24h'?1:range==='7d'?7:90;
   const now=ST.unix, t0=now-Math.round(days*86400);
   const url=days<=1?`/api/series?tier=A&from=${t0}&to=${now}&every=${days<=0.25?1:days<1?2:3}`:`/api/series?tier=B&from=${t0}&to=${now}&every=${days===7?1:6}`;
-  let data; try{ data=csv(await (await api(url)).text()); }catch(e){ toast('Series failed: '+e.message); return; }
+  let data;
+  const kept=cache[range];
+  if(!fresh&&kept&&now-kept.unix<60){ data=kept.data; }
+  else{
+    try{ data=csv(await (await api(url,{signal})).text()); }catch(e){ if(gen===chartGen) toast('Series failed: '+e.message); return; }
+    if(gen!==chartGen) return;
+    cache[range]={unix:now,data};
+  }
   const cv=$('cv'), dpr=window.devicePixelRatio||1, W=cv.clientWidth, H=360; cv.width=W*dpr; cv.height=H*dpr; const c=cv.getContext('2d'); c.scale(dpr,dpr);
   const showT=$('showtemp').checked, L=showT?40:12, R=46, T=12, B=40, w=W-L-R, h=H-T-B;
   const TH={blue:CFG.levels.blue,yellow:CFG.levels.yellow,red:CFG.levels.red};
@@ -602,12 +620,14 @@ async function drawChart(){
   // events in range: level changes as dashed lines in the new level's colour, fault, ack, boot, calibration
   // as lettered ticks, test runs as a shaded band
   await loadEventsData();
+  if(gen!==chartGen) return; // a newer draw owns the canvas now
   c.font='10px system-ui';
   const marks=[]; // {x, text} for the hover readout
   const mark=(x,col,label,r)=>{ if(r){ const [,m,v]=describe(r); marks.push({x,text:fmtTime(r.ts)+'  '+m+(v?' · '+v:'')}); } c.strokeStyle=css(col); c.globalAlpha=.7; c.setLineDash([2,3]); c.beginPath(); c.moveTo(x,T); c.lineTo(x,T+h); c.stroke(); c.setLineDash([]); c.globalAlpha=1; if(label){ c.fillStyle=css(col); c.fillText(label,x+2,T+11); } };
   let runStart=null;
   let boostStart=null;
   let dropStart=null;
+  let suspStart=null;
   for(const r of EVENTS){
     if(!r.ts||r.ts<t0||r.ts>now) continue;
     const x=X(r.ts);
@@ -626,6 +646,8 @@ async function drawChart(){
       else if(t===4||t===8) mark(x,'--muted','A',r);
       else if(t===9){ dropStart=r.ts; mark(x,'--purple','?',r); }
       else if(t===10&&dropStart!=null){ c.fillStyle=css('--purple'); c.globalAlpha=.12; c.fillRect(X(dropStart),T,Math.max(2,x-X(dropStart)),h); c.globalAlpha=1; marks.push({x,text:fmtTime(r.ts)+'  '+describe(r)[1]}); dropStart=null; }
+      else if(t===11){ if(suspStart==null) suspStart=r.ts; mark(x,'--muted','S',r); }
+      else if(t===12&&suspStart!=null){ c.fillStyle=css('--muted'); c.globalAlpha=.15; c.fillRect(X(suspStart),T,Math.max(2,x-X(suspStart)),h); c.globalAlpha=1; marks.push({x,text:fmtTime(r.ts)+'  '+describe(r)[1]+' · '+describe(r)[2]}); suspStart=null; }
       continue; }
     if(r.type===3) mark(x,'--muted','B',r);
     if(r.type===7&&r.aux===3) mark(x,'--muted','C',r);
@@ -633,6 +655,7 @@ async function drawChart(){
   if(runStart!=null){ c.fillStyle=css('--white'); c.globalAlpha=.3; c.fillRect(X(runStart),T,Math.max(2,X(now)-X(runStart)),h); c.globalAlpha=1; }
   if(boostStart!=null){ c.fillStyle=css('--cyan'); c.globalAlpha=.25; c.fillRect(X(boostStart),T,Math.max(2,X(now)-X(boostStart)),h); c.globalAlpha=1; c.fillStyle=css('--cyan'); c.fillText('boost',X(boostStart)+2,T+11); }
   if(dropStart!=null){ c.fillStyle=css('--purple'); c.globalAlpha=.12; c.fillRect(X(dropStart),T,Math.max(2,X(now)-X(dropStart)),h); c.globalAlpha=1; }
+  if(suspStart!=null){ c.fillStyle=css('--muted'); c.globalAlpha=.15; c.fillRect(X(suspStart),T,Math.max(2,X(now)-X(suspStart)),h); c.globalAlpha=1; }
   if(showT){
     const temps=days<=1?data.map(d=>d.temp):data.map(d=>(d.temp_min+d.temp_max)/2);
     const tmin=Math.min(...temps)-0.5, tmax=Math.max(...temps)+0.5, TY=v=>T+(tmax-v)/(tmax-tmin)*h;
@@ -649,7 +672,8 @@ async function drawChart(){
 
 // ---------- events ----------
 const TYPE={3:'Boot',4:'Fault',5:'Config',6:'Correction',7:'Command',8:'TimeSync',9:'Daily'};
-const LADDER_EV=['Level','Effective level (1.0)','FAULT','FAULT cleared','Ack','Pulse off','Heat on','Heat off','Ack (automatic, by day)','Sudden drop','Sudden drop over'];
+const LADDER_EV=['Level','Effective level (1.0)','FAULT','FAULT cleared','Ack','Pulse off','Heat on','Heat off','Ack (automatic, by day)','Sudden drop','Sudden drop over','Alert suspended','Alert resumed'];
+const RESUME_WHY=['its time ran out','the level went deeper','FAULT','the alert is over','by hand'];
 const SVC_EV=['Test start','Device start','Device end','Test end','Test skipped','Test FAIL','Test fail cleared','Test inconclusive'];
 const BOOST_EV=['Boost start','Boost target reached','Boost window end','Boost paused'];
 const OUTCOME=['—','pass','FAIL','inconclusive','unchecked'];
@@ -663,6 +687,8 @@ function describe(r){
     if(t===5) return ['blue', 'Pulse off · '+dev(d), ''];
     if(t===9) return ['fail', 'Sudden drop', r.f0.toFixed(2)+' mg/L · falling '+(-r.f1).toFixed(1)+' mg/L per 10 min · dwells extended'];
     if(t===10) return ['normal', 'Sudden drop over', r.f0.toFixed(2)+' mg/L · back above every threshold, dwells normal'];
+    if(t===11) return ['normal', 'Alert suspended', Math.round(r.f1/60)+' min · its devices and alarm as at Normal · '+r.f0.toFixed(2)+' mg/L'];
+    if(t===12) return ['normal', 'Alert resumed', (RESUME_WHY[r.f1]||'')+' · '+r.f0.toFixed(2)+' mg/L'];
     return [t===2?'fault':'normal', LADDER_EV[t]||('event '+t), r.f0?r.f0.toFixed(2)+' mg/L':''];
   }
   if(r.type===10){ const t=r.aux&255, d=(r.aux>>8)&255, o=(r.aux>>16)&255, sk=(r.aux>>24)&255;
@@ -691,10 +717,15 @@ function describe(r){
   return ['system',TYPE[r.type]||('type '+r.type),''];
 }
 let EVENTS=[];
-// Incremental: only records after the newest one already held.
-async function loadEventsData(){
-  const since=EVENTS.length?EVENTS[EVENTS.length-1].seq+1:0;
-  try{ const more=csv(await (await api('/api/events?since='+since)).text()); if(more.length) EVENTS=EVENTS.concat(more); }catch(e){ toast('Events failed: '+e.message); }
+// Incremental: only records after the newest one already held. One load at a time: callers that overlap share it
+// (two would both fetch the same new records and append them twice).
+let eventsLoading=null;
+function loadEventsData(){
+  if(!eventsLoading) eventsLoading=(async()=>{
+    const since=EVENTS.length?EVENTS[EVENTS.length-1].seq+1:0;
+    try{ const more=csv(await (await api('/api/events?since='+since)).text()); if(more.length) EVENTS=EVENTS.concat(more); }catch(e){ toast('Events failed: '+e.message); }
+  })().finally(()=>{ eventsLoading=null; });
+  return eventsLoading;
 }
 async function loadEvents(){
   if(!CFG) await loadConfig(true);
@@ -726,11 +757,11 @@ const TIPS={
  'levels.blue.slope_mgl_per_10min':'Also enter Blue when DO is falling faster than this (mg/L per 10 minutes) even if it is still above the threshold — catches a stopped pump early. 0 = off.',
  'devices.*.name':'What this device is: air pump, powerhead, siren…',
  'devices.*.slot':'What this device switches: one of the board\'s relays, a Tuya plug on your network, or nothing. Each relay or plug outlet belongs to one device. The fields beside it are that output\'s own settings.',
- 'devices.*.trigger':'Which alert switches this device on. Levels are cumulative: a Yellow device is also on at Red. heat = on when the water is too warm. none = unused.',
+ 'devices.*.trigger':'Which alert switches this device on. Levels are cumulative: a Yellow device is also on at Red. none = unused.',
  'devices.*.mode':'on = switched on for the whole alert. pulse_off = cut once for a few seconds when the level activates, to restart a stalled DC pump; needs NC wiring.',
  'devices.*.ack_silences':'Acknowledging the alarm switches this device off for the ack-silence time — for sirens and beacons. Such a device is never on at Blue.',
  'devices.*.test_s':'Seconds the device runs during the evening self test, so a clogged airstone or a stuck pump is found before the night. 0 = not exercised.',
- 'devices.*.min_response_pct':'Saturation change the check must see while this device runs to count it as working; less = FAIL alert. 0 = run it but do not judge.',
+ 'devices.*.min_response_pct':'Rise in saturation above the tank\'s own trend the check must see while this device runs to count it as working; less = FAIL alert (unchecked when DO started above no_fail_above_mgl). A fall never counts. 0 = run it but do not judge.',
  'test.window.0':'The daily self test runs inside this window — before the night lock, while someone can still react.',
  'test.window.1':'End of the window; must not be later than the night start.',
  'test.settle_s':'Pause between two devices so their effects do not overlap in the measurement.',
@@ -757,8 +788,6 @@ const TIPS={
  'night.day_alarm':'Outside the night hours: sound = as at night; acknowledge after 10 s = an alarm sounds briefly, then acknowledges itself as if Ack were pressed (a deeper level or FAULT announces again); silent = the buzzer and ack-silenced devices stay quiet. The level, its devices and the pushes are unchanged. The night always sounds.',
  'sudden_drop.slope_mgl_per_10min':'A fall steeper than this over the last 2 minutes is suspect: tank water cannot lose oxygen that fast, a snail or a bubble on the probe can. Must be steeper than the Blue slope trigger. 0 = off.',
  'sudden_drop.extend_s':'While a sudden drop is suspect, every level waits this much longer than its dwell. The suspicion ends when the reading is back above every entry threshold. 0 = only log it.',
- 'heat.on_c':'Devices with trigger = heat switch on above this water temperature (fan, chiller).',
- 'heat.off_c':'…and off again below this. The gap avoids toggling.',
  'sample_period_s':'Seconds between probe readings (5..60). Every reading is logged.',
  'fault.consecutive_failures':'Consecutive failed, frozen or nonsense readings before FAULT is raised.',
  'fault.stuck_minutes':'A reading that has not changed at all for this long counts as frozen (the probe is dead or out of the water).',
@@ -774,9 +803,6 @@ const TIPS={
  'signals.*.volume':'0 = silent, 3 = loudest.',
  'signals.buzzer_hz':'Frequency of the buzzer tone (200..8000 Hz). Passive buzzers are loudest around 2–4 kHz.',
  'signals.led_brightness':'Brightness of the status LED (0..100 %). The colour codes are fixed.',
- 'ntfy.enabled':'Send push notifications through ntfy.sh — one HTTPS POST per event, from the board itself.',
- 'ntfy.topic':'Your ntfy topic (subscribe to it in the ntfy app). Treat it like a password: anyone who knows it can read the pushes.',
- 'ntfy.min_level':'Lowest alert level that sends a push. FAULT, test failures and reboots are always sent when enabled.',
 };
 function tipFor(k){ return TIPS[k]||TIPS[k.replace(/\.\d+\./,'.*.').replace(/\.(normal|blue|yellow|red|fault)\./,'.*.')]||''; }
 function applyTips(){
@@ -794,9 +820,9 @@ async function loadConfig(quiet){
   const c=CFG;
   $('lvcfg').innerHTML=['blue','yellow','red'].map(k=>{ const l=c.levels[k]; return `<tr><td><span class="tag ${k}">${k}</span></td><td><input class="mono" data-k="levels.${k}.mgl" size="5"></td><td><input class="mono" data-k="levels.${k}.hysteresis" size="5"></td><td><input class="mono" data-k="levels.${k}.dwell_s" size="4"></td><td class="mono">${(l.mgl-l.hysteresis).toFixed(2)}</td><td class="mono">${(l.mgl+l.hysteresis).toFixed(2)}</td></tr>`; }).join('');
   await loadSlots();
-  $('devcfg').innerHTML=devNums(c).map(n=>{ const d=c.devices[n]; return `<tr><td>${n}</td><td><input data-k="devices.${n}.name" size="14"></td><td id="slot-${n}" class="slotcell">${slotEditor(n,d.slot||{type:'none'})}</td><td>${sel(['none','blue','yellow','red','heat'],d.trigger,`data-k="devices.${n}.trigger"`)}</td><td>${sel(['on','pulse_off'],d.mode,`data-k="devices.${n}.mode"`)}</td><td><input type="checkbox" data-k="devices.${n}.ack_silences"></td><td><input class="mono" data-k="devices.${n}.test_s" size="4"></td><td><input class="mono" data-k="devices.${n}.min_response_pct" size="4"></td><td><input type="checkbox" data-k="devices.${n}.boost"></td><td><input class="mono" data-win="${n}" size="18" placeholder="—" value="${(d.windows||[]).map(w=>w[0]+'-'+w[1]).join(', ')}"></td></tr>`; }).join('');
+  $('devcfg').innerHTML=devNums(c).map(n=>{ const d=c.devices[n]; return `<tr><td>${n}</td><td><input data-k="devices.${n}.name" size="14"></td><td id="slot-${n}" class="slotcell">${slotEditor(n,d.slot||{type:'none'})}</td><td>${sel(['none','blue','yellow','red'],d.trigger,`data-k="devices.${n}.trigger"`)}</td><td>${sel(['on','pulse_off'],d.mode,`data-k="devices.${n}.mode"`)}</td><td><input type="checkbox" data-k="devices.${n}.ack_silences"></td><td><input class="mono" data-k="devices.${n}.test_s" size="4"></td><td><input class="mono" data-k="devices.${n}.min_response_pct" size="4"></td><td><input type="checkbox" data-k="devices.${n}.boost"></td><td><input class="mono" data-win="${n}" size="18" placeholder="—" value="${(d.windows||[]).map(w=>w[0]+'-'+w[1]).join(', ')}"></td></tr>`; }).join('');
 
-  $('sigcfg').innerHTML=['normal','blue','yellow','red','fault'].map(k=>{ const s=c.signals[k]; const silent=k==='normal'; return `<tr><td><span class="tag ${k==='fault'?'heat':k==='normal'?'none':k}">${k}</span></td><td>${silent?'<span class="muted">off</span>':sel(['off','chirp','beep','double','triple','continuous'],s.buzzer,`data-k="signals.${k}.buzzer"`)}</td><td>${silent?'':sel([0,1,2,3],s.volume,`data-k="signals.${k}.volume"`)}</td></tr>`; }).join('');
+  $('sigcfg').innerHTML=['normal','blue','yellow','red','fault'].map(k=>{ const s=c.signals[k]; const silent=k==='normal'; return `<tr><td><span class="tag ${k==='normal'?'none':k}">${k}</span></td><td>${silent?'<span class="muted">off</span>':sel(['off','chirp','beep','double','triple','continuous'],s.buzzer,`data-k="signals.${k}.buzzer"`)}</td><td>${silent?'':sel([0,1,2,3],s.volume,`data-k="signals.${k}.volume"`)}</td></tr>`; }).join('');
   document.querySelectorAll('#config [data-k]').forEach(el=>{ const v=get(c,el.dataset.k); if(el.type==='checkbox') el.checked=!!v; else el.value=v==null?'':v; });
   if(ST&&ST.correction) $('scalehint').textContent=ST.correction.seawater_scale_hint.toFixed(3);
   $('cfgmsg').className='note'; $('cfgmsg').textContent='schema '+c.schema;
@@ -864,7 +890,6 @@ async function saveConfig(){
 }
 function downloadConfig(){ let c; try{ c=collectConfig(); }catch(e){ toast(e.message); return; } const a=document.createElement('a'); a.href='data:application/json,'+encodeURIComponent(JSON.stringify(c,null,2)); a.download='reefdo-config.json'; a.click(); }
 async function buzzerTest(){ try{ const r=await sendForm('/api/buzzer-test',{pattern:$('bt-pattern').value,volume:$('bt-volume').value,hz:$('bt-hz').value,s:$('bt-s').value}); toast(r.ok?'Playing':'Rejected'); }catch(e){ toast('Failed: '+e.message); } }
-async function ntfyTest(){ try{ const r=await sendJ('/api/ntfy-test',{}); toast(r.ok?'Test push sent':'Push failed (topic set? saved? online?)'); }catch(e){ toast('Failed: '+e.message); } }
 
 // ---------- maintenance ----------
 function testButtons(){ if(!ST) return; $('devtest').innerHTML=ST.devices.map((d,i)=>`<button class="btn" onclick="deviceTest(${i+1})">${i+1} · ${d.name}</button>`).join(''); }
@@ -873,8 +898,8 @@ async function deviceTest(n){ try{ const r=await sendJ('/api/cmd',{manual:{devic
 async function ota(){
   const f=$('otafile').files[0]; if(!f){ toast('Choose a .bin first'); return; }
   const el=$('otaprog'); el.style.width='30%';
-  try{ const r=await fetch('/api/ota',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:f}); const j=await r.json(); el.style.width='100%';
-    toast(j.ok?'Image written to '+j.partition+' · rebooting':'OTA failed: '+(j.message||r.status)); }
+  try{ const j=await api('/api/ota',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:f}).then(r=>r.json()); el.style.width='100%';
+    toast(j.ok?'Image written to '+j.partition+' · rebooting':'OTA failed: '+(j.message||'refused')); }
   catch(e){ el.style.width='0'; toast('OTA failed: '+e.message); }
 }
 
@@ -890,13 +915,14 @@ async function loadSetup(){
   $('time-state').textContent=ST&&ST.clock_known?fmtTime(ST.unix)+' · tz '+(ST.tz/3600)+' h'+(w.ntp?' · NTP':''):'unknown';
   $('time-here').textContent=new Date().toLocaleString('en-GB')+' · tz '+(tzHere()/3600)+' h';
 }
+async function cloudLink(){ try{ const r=await sendJ('/api/cloud-link',{}); if(r.ok){ $('cloud-service').textContent=r.service; $('cloud-pop').textContent=r.pop; $('cloud-code').hidden=false; } toast(r.ok?'Link window open: 10 minutes':'Not now: '+r.message); refreshWifi(); }catch(e){ toast('Failed: '+e.message); } }
 async function saveWifi(){ try{ const r=await sendForm('/api/wifi',{ssid:$('wifi-ssid').value,pass:$('wifi-pass').value}); toast(r.ok?'Saved; connecting':'Rejected'); }catch(e){ toast('Failed: '+e.message); } }
 async function savePassword(){ try{ const pw=$('pw-new').value; const r=await sendForm('/api/passwd',{password:pw}); if(r.ok){ AUTH=btoa('reef:'+(pw||'reefdo')); localStorage.setItem('auth',AUTH); } toast(r.ok?'Password changed':'Rejected (max 32)'); }catch(e){ toast('Failed: '+e.message); } }
 
 // ---------- start ----------
 (async()=>{ if(AUTH){ try{ await getJ('/api/auth'); $('lock').textContent='🔓'; }catch(e){ AUTH=''; localStorage.removeItem('auth'); } } await loadConfig(true); await refresh(); await refreshWifi(); testButtons(); show((location.hash||'#status').slice(1)); })();
 setInterval(async()=>{ await refresh(); testButtons(); },5000);
-setInterval(()=>{ if($('chart').classList.contains('on')) drawChart(); },30000);
+setInterval(()=>{ if($('chart').classList.contains('on')&&!chartLoading) drawChart(true); },30000); // fresh data; never cuts a load short
 setInterval(refreshWifi,15000);
 </script>
 </body>

@@ -1,0 +1,19 @@
+menu "ReefDO"
+
+    config REEFDO_CLOUD
+        bool "Phone app through ESP RainMaker Neo"
+        default y
+        help
+            The board reports to the ESP RainMaker Home app and accepts its acknowledge and alert suspend.
+            An observer like the web page: the ladder never depends on it, and nothing changes while the cloud
+            is down. Off: no cloud code in the image at all.
+
+    config REEFDO_QEMU
+        bool "Build for Espressif's QEMU (open_eth instead of Wi-Fi, simulated tank)"
+        default n
+        help
+            For a smoke test of the real firmware on a PC: the network is QEMU's emulated Ethernet (user-mode,
+            port-forwarded to the host), the probe is the virtual tank, and the LED strip is not started.
+            Never for a board.
+
+endmenu

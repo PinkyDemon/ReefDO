@@ -20,7 +20,7 @@ Config ExampleConfig()
     c.devices[2] = {Trigger::Yellow, Mode::On, false};     // strong air pump
     c.devices[3] = {Trigger::Yellow, Mode::On, true};      // siren
     c.devices[4] = {Trigger::Blue, Mode::PulseOff, false}; // return pump
-    c.devices[5] = {Trigger::Heat, Mode::On, false};       // fan
+    c.devices[5] = {Trigger::None, Mode::On, false};       // unused
     return c;
 }
 
@@ -30,13 +30,11 @@ struct Bench
     State st;
     uint64_t nowMs = 1'000'000; // never start at 0: timers must not depend on it
     std::optional<uint16_t> minute = uint16_t{12 * 60};
-    float temp = 26.0f;
 
     Input MakeInput(std::optional<float> pD) const
     {
         Input in;
         in.doMgl = pD;
-        in.tempC = pD.has_value() ? std::optional<float>(temp) : std::nullopt;
         in.nowMs = nowMs;
         in.minuteOfDay = minute;
         return in;
@@ -380,30 +378,6 @@ TEST_CASE("Pulses never run back to back: a re-activation during a pulse does no
     REQUIRE(o.deviceOn[4]);
 }
 
-TEST_CASE("Heat device follows temperature with hysteresis, independent of level", "[ladder]")
-{
-    Bench b;
-    b.temp = 27.9f;
-    Output o = b.Tick(6.5f);
-    REQUIRE_FALSE(o.heat);
-    b.temp = 28.0f;
-    o = b.Tick(6.5f);
-    REQUIRE(o.heat);
-    REQUIRE(HasEvent(o, EventType::HeatOn));
-    REQUIRE(o.deviceOn[5]);
-    REQUIRE(o.level == Level::Normal);
-    b.temp = 27.6f;
-    o = b.Tick(6.5f);
-    REQUIRE(o.heat);          // between the thresholds: unchanged
-    o = b.Tick(std::nullopt); // probe down: keep the decision
-    REQUIRE(o.heat);
-    b.temp = 27.5f;
-    o = b.Tick(6.5f);
-    REQUIRE_FALSE(o.heat);
-    REQUIRE(HasEvent(o, EventType::HeatOff));
-    REQUIRE_FALSE(o.deviceOn[5]);
-}
-
 TEST_CASE("Night lock holds Blue until morning once triggered at night", "[ladder]")
 {
     Bench b;
@@ -648,4 +622,154 @@ TEST_CASE("A sudden dip back within extend_s changes no level; the threshold cou
     o = off.Tick(4.00f, [](Input& pIn) { pIn.fastSlopeMglPer10min = -50.0f; });
     REQUIRE_FALSE(o.suspect);
     REQUIRE(o.level == Level::Red);
+}
+
+namespace
+{
+
+const Event* Find(const Output& pO, EventType pT)
+{
+    for(const Event& e : pO.events)
+        if(e.type == pT) return &e;
+    return nullptr;
+}
+
+// Yellow at 4.9 mg/L (the pulse of the return pump long over), then one tick with the suspend command.
+Output SuspendAtYellow(Bench& pB, uint32_t pSeconds = 600)
+{
+    Output o = pB.Hold(4.9f, 200);
+    REQUIRE(o.level == Level::Yellow);
+    REQUIRE(o.sound);
+    return pB.Tick(4.9f, [pSeconds](Input& pIn) { pIn.suspendAlertsS = pSeconds; });
+}
+
+} // namespace
+
+TEST_CASE("Alert suspend: the alert-driven devices and the alarm as at Normal, the level stays real", "[ladder]")
+{
+    Bench b;
+    Output o = SuspendAtYellow(b);
+    const Event* e = Find(o, EventType::AlertSuspend);
+    REQUIRE(e != nullptr);
+    REQUIRE(e->detail == 600);
+    REQUIRE(o.level == Level::Yellow); // shown as it is
+    REQUIRE(o.alertsSuspended);
+    REQUIRE(o.alertsSuspendLeftS == 600);
+    REQUIRE_FALSE(o.sound);
+    REQUIRE(o.deviceOn == std::array<bool, reefdo::DEVICES>{false, false, false, false, true, false}); // as at Normal
+    o = b.Hold(4.9f, 580);
+    REQUIRE(o.alertsSuspended);
+    REQUIRE(o.alertsSuspendLeftS == 10);
+    REQUIRE_FALSE(HasEvent(o, EventType::AlertResume));
+    o = b.Tick(4.9f); // 600 s after the command: its time is up
+    e = Find(o, EventType::AlertResume);
+    REQUIRE(e != nullptr);
+    REQUIRE(e->detail == static_cast<uint32_t>(ResumeReason::Time));
+    REQUIRE_FALSE(o.alertsSuspended);
+    REQUIRE(o.alertsSuspendLeftS == 0);
+    REQUIRE(o.sound);
+    REQUIRE(o.deviceOn[2]);
+    REQUIRE_FALSE(HasEvent(o, EventType::Pulse)); // the return pump's last pulse is too recent for another
+}
+
+TEST_CASE("Alert suspend ends at a deeper level, in a FAULT, when the alert is over, or by hand", "[ladder]")
+{
+    SECTION("deeper")
+    {
+        Bench b;
+        SuspendAtYellow(b);
+        const Output o = b.Tick(4.2f); // Red, no dwell
+        REQUIRE(o.level == Level::Red);
+        REQUIRE(Find(o, EventType::AlertResume)->detail == static_cast<uint32_t>(ResumeReason::Deeper));
+        REQUIRE(o.sound);
+        REQUIRE(o.deviceOn[2]);
+    }
+    SECTION("fault, and no new suspend during it")
+    {
+        Bench b;
+        SuspendAtYellow(b);
+        Output o = b.Hold(std::nullopt, 40);
+        REQUIRE(o.fault);
+        REQUIRE(Find(o, EventType::AlertResume)->detail == static_cast<uint32_t>(ResumeReason::Fault));
+        o = b.Tick(std::nullopt, [](Input& pIn) { pIn.suspendAlertsS = 600; });
+        REQUIRE_FALSE(o.alertsSuspended);
+        REQUIRE(o.events.empty());
+    }
+    SECTION("the alert is over")
+    {
+        Bench b;
+        Output o = b.Hold(5.5f, 130); // Blue
+        REQUIRE(o.level == Level::Blue);
+        b.Tick(5.5f, [](Input& pIn) { pIn.suspendAlertsS = 3600; });
+        o = b.Hold(6.5f, 600); // recover_sustain_s above the exit threshold
+        REQUIRE(o.level == Level::Normal);
+        REQUIRE(Find(o, EventType::AlertResume)->detail == static_cast<uint32_t>(ResumeReason::Over));
+        o = b.Hold(5.5f, 130); // a new alert sounds as ever
+        REQUIRE(o.level == Level::Blue);
+        REQUIRE(o.deviceOn[0]);
+    }
+    SECTION("by hand")
+    {
+        Bench b;
+        SuspendAtYellow(b);
+        const Output o = b.Tick(4.9f, [](Input& pIn) { pIn.suspendAlertsS = 0; });
+        REQUIRE(Find(o, EventType::AlertResume)->detail == static_cast<uint32_t>(ResumeReason::Hand));
+        REQUIRE(o.sound);
+    }
+}
+
+TEST_CASE("Alert suspend needs an alert, restarts on a new command and lasts at most an hour", "[ladder]")
+{
+    Bench b;
+    Output o = b.Tick(6.5f, [](Input& pIn) { pIn.suspendAlertsS = 600; });
+    REQUIRE_FALSE(o.alertsSuspended); // nothing to suspend at Normal
+    o = b.Tick(6.5f, [](Input& pIn) { pIn.suspendAlertsS = 0; });
+    REQUIRE(o.events.empty()); // nothing to resume
+    SuspendAtYellow(b, 600);
+    o = b.Tick(4.9f, [](Input& pIn) { pIn.suspendAlertsS = 300; });
+    REQUIRE(Find(o, EventType::AlertSuspend)->detail == 300);
+    REQUIRE_FALSE(HasEvent(o, EventType::AlertResume));
+    REQUIRE(o.alertsSuspendLeftS == 300);
+    o = b.Tick(4.9f, [](Input& pIn) { pIn.suspendAlertsS = 99'999; });
+    REQUIRE(Find(o, EventType::AlertSuspend)->detail == ALERT_SUSPEND_MAX_S);
+    REQUIRE(o.alertsSuspendLeftS == ALERT_SUSPEND_MAX_S);
+}
+
+TEST_CASE("Alert suspend by day: no automatic acknowledgement while suspended", "[ladder]")
+{
+    Bench b;
+    SuspendAtYellow(b);
+    b.cfg.dayAlarm = DayAlarm::AutoAck; // would acknowledge a sounding alarm after 10 s
+    for(int i = 0; i < 12; ++i)
+    {
+        const Output o = b.Tick(4.9f);
+        REQUIRE(o.alertsSuspended);
+        REQUIRE_FALSE(HasEvent(o, EventType::AutoAck));
+        REQUIRE_FALSE(o.sound);
+    }
+}
+
+TEST_CASE("Alert suspend never starts in the sample the level went deeper", "[ladder]")
+{
+    SECTION("a fresh suspend")
+    {
+        Bench b;
+        Output o = b.Hold(4.9f, 200);
+        REQUIRE(o.level == Level::Yellow);
+        o = b.Tick(4.2f, [](Input& pIn) { pIn.suspendAlertsS = 600; }); // Red in this very sample
+        REQUIRE(o.level == Level::Red);
+        REQUIRE_FALSE(o.alertsSuspended);
+        REQUIRE_FALSE(HasEvent(o, EventType::AlertSuspend));
+        REQUIRE(o.sound);
+    }
+    SECTION("a restart does not survive a deeper level")
+    {
+        Bench b;
+        SuspendAtYellow(b);
+        const Output o = b.Tick(4.2f, [](Input& pIn) { pIn.suspendAlertsS = 600; });
+        REQUIRE(Find(o, EventType::AlertResume)->detail == static_cast<uint32_t>(ResumeReason::Deeper));
+        REQUIRE_FALSE(HasEvent(o, EventType::AlertSuspend));
+        REQUIRE_FALSE(o.alertsSuspended);
+        REQUIRE(o.deviceOn[2]);
+    }
 }

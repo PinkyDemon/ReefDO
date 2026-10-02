@@ -26,10 +26,10 @@ add_executable(reefdo_tests
   test_log.cpp
   test_sim.cpp
   test_app.cpp
-  test_api.cpp
   test_tuya.cpp
   test_slot.cpp
 )
+target_include_directories(reefdo_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}) # the helpers, for gateway/tests too
 target_link_libraries(reefdo_tests PRIVATE reefdo_core catch2)
 if(MSVC)
   target_compile_options(reefdo_tests PRIVATE /W4 /WX /EHsc /external:W0)
@@ -51,18 +51,5 @@ if(REEFDO_COVERAGE)
   else()
     target_link_options(reefdo_tests PRIVATE -fprofile-instr-generate)
   endif()
-
-  # `cmake --build --preset coverage` runs the tests instrumented, merges the profile,
-  # writes coverage/report.txt + coverage/html/, and fails unless core/src is at
-  # 100 % lines AND 100 % branches. Pure CMake script; no shell, no Python.
-  add_custom_target(coverage
-    COMMAND ${CMAKE_COMMAND}
-      -DTEST_EXE=$<TARGET_FILE:reefdo_tests>
-      -DLLVM_BIN=${_llvm_bin}
-      -DOUT_DIR=${CMAKE_BINARY_DIR}/coverage
-      -DSOURCE_ROOT=${CMAKE_SOURCE_DIR}/core
-      -P ${CMAKE_SOURCE_DIR}/cmake/coverage.cmake
-    DEPENDS reefdo_tests
-    USES_TERMINAL
-    COMMENT "Running tests under llvm-cov and gating at 100 % line + branch coverage")
+  # the coverage target itself is in the top-level CMakeLists.txt: it spans core/ and gateway/
 endif()

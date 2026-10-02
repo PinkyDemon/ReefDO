@@ -10,6 +10,11 @@
 #include "esp_sntp.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
+#include "sdkconfig.h"
+#if CONFIG_REEFDO_QEMU
+#include "esp_eth.h"
+#include "esp_eth_mac_openeth.h"
+#endif
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "hal/nvs_store.hpp"
@@ -43,6 +48,7 @@ void Update(F pChange)
 }
 bool sApStarted = false;
 bool sStaConfigured = false;
+bool sPaused = false; // the phone app's provisioning owns the station: no reconnects of ours
 int64_t sLastConnectedMs = 0;
 
 void StartAp()
@@ -94,7 +100,7 @@ void OnWifi(void*, esp_event_base_t, int32_t pId, void*)
     switch(pId)
     {
         case WIFI_EVENT_STA_START:
-            if(sStaConfigured) esp_wifi_connect();
+            if(sStaConfigured && !sPaused) esp_wifi_connect();
             break;
         case WIFI_EVENT_STA_DISCONNECTED:
             Update(
@@ -103,7 +109,7 @@ void OnWifi(void*, esp_event_base_t, int32_t pId, void*)
                     pS.connected = false;
                     pS.ip.clear();
                 });
-            if(sStaConfigured) esp_wifi_connect();
+            if(sStaConfigured && !sPaused) esp_wifi_connect();
             break;
         default: break;
     }
@@ -140,11 +146,47 @@ void Watch(void*)
         vTaskDelay(pdMS_TO_TICKS(1000));
         const int64_t now = esp_timer_get_time() / 1000;
         const bool connected = GetStatus().connected;
-        if(!connected && now - sLastConnectedMs > AP_AFTER_MS) StartAp();
+        if(!connected && !sPaused && now - sLastConnectedMs > AP_AFTER_MS) StartAp();
         wifi_ap_record_t ap = {};
         if(connected && esp_wifi_sta_get_ap_info(&ap) == ESP_OK) Update([&ap](Status& pS) { pS.rssi = ap.rssi; });
     }
 }
+
+#if CONFIG_REEFDO_QEMU
+// QEMU: its emulated Ethernet (open_eth) stands in for the Wi-Fi station; DHCP from QEMU's user-mode network.
+void OnEthIp(void*, esp_event_base_t, int32_t, void* pData)
+{
+    const ip_event_got_ip_t* e = static_cast<const ip_event_got_ip_t*>(pData);
+    char ip[16] = {};
+    std::snprintf(ip, sizeof ip, IPSTR, IP2STR(&e->ip_info.ip));
+    Update(
+        [&ip](Status& pS)
+        {
+            pS.ssid.assign("(QEMU Ethernet)");
+            pS.ip.assign(ip);
+            pS.connected = true;
+        });
+    ESP_LOGI(TAG, "QEMU Ethernet up: %s", ip);
+}
+
+void StartQemuEthernet()
+{
+    esp_netif_config_t cfg = ESP_NETIF_DEFAULT_ETH();
+    esp_netif_t* netif = esp_netif_new(&cfg);
+    esp_netif_set_hostname(netif, HOSTNAME);
+    eth_mac_config_t macCfg = ETH_MAC_DEFAULT_CONFIG();
+    eth_phy_config_t phyCfg = ETH_PHY_DEFAULT_CONFIG();
+    phyCfg.autonego_timeout_ms = 100;
+    esp_eth_mac_t* mac = esp_eth_mac_new_openeth(&macCfg);
+    esp_eth_phy_t* phy = esp_eth_phy_new_generic(&phyCfg);
+    esp_eth_config_t ethCfg = ETH_DEFAULT_CONFIG(mac, phy);
+    esp_eth_handle_t eth = nullptr;
+    ESP_ERROR_CHECK(esp_eth_driver_install(&ethCfg, &eth));
+    ESP_ERROR_CHECK(esp_netif_attach(netif, esp_eth_new_netif_glue(eth)));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_GOT_IP, &OnEthIp, nullptr));
+    ESP_ERROR_CHECK(esp_eth_start(eth));
+}
+#endif
 
 } // namespace
 
@@ -152,6 +194,15 @@ void Start()
 {
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
+#if CONFIG_REEFDO_QEMU
+    StartQemuEthernet();
+    ESP_ERROR_CHECK(mdns_init());
+    mdns_hostname_set(HOSTNAME);
+    esp_sntp_config_t qemuSntp = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+    qemuSntp.sync_cb = &OnTimeSync;
+    ESP_ERROR_CHECK(esp_netif_sntp_init(&qemuSntp));
+    return;
+#endif
     sSta = esp_netif_create_default_wifi_sta();
     sAp = esp_netif_create_default_wifi_ap();
     esp_netif_set_hostname(sSta, HOSTNAME);
@@ -194,6 +245,9 @@ bool SetCredentials(std::string_view pSsid, std::string_view pPassword)
 {
     if(pSsid.empty() || pSsid.size() > 32 || pPassword.size() > 64) return false;
     if(!hal::nvs::SetStr(KEY_SSID, pSsid) || !hal::nvs::SetStr(KEY_PASS, pPassword)) return false;
+#if CONFIG_REEFDO_QEMU
+    return true; // stored for a board; QEMU has no Wi-Fi
+#endif
     esp_wifi_disconnect();
     if(ConfigureSta()) esp_wifi_connect();
     sLastConnectedMs = esp_timer_get_time() / 1000; // give the new network its two minutes before the AP
@@ -204,6 +258,9 @@ void Forget()
 {
     hal::nvs::EraseKey(KEY_SSID);
     hal::nvs::EraseKey(KEY_PASS);
+#if CONFIG_REEFDO_QEMU
+    return;
+#endif
     sStaConfigured = false;
     Update([](Status& pS) { pS.ssid.clear(); });
     esp_wifi_disconnect();
@@ -213,6 +270,42 @@ void Forget()
 bool HasCredentials()
 {
     return sStaConfigured;
+}
+
+} // namespace net
+
+namespace net
+{
+
+bool RememberCredentials(std::string_view pSsid, std::string_view pPassword)
+{
+    if(pSsid.empty() || pSsid.size() > 32 || pPassword.size() > 64) return false;
+    if(!hal::nvs::SetStr(KEY_SSID, pSsid) || !hal::nvs::SetStr(KEY_PASS, pPassword)) return false;
+    sStaConfigured = true;
+    const std::string_view ssid = pSsid;
+    Update([&ssid](Status& pS) { pS.ssid.assign(ssid); });
+    return true;
+}
+
+void PauseStation()
+{
+    sPaused = true;
+}
+
+void ResumeStation(bool pJoined)
+{
+    // The provisioning manager forced station mode (the setup AP is gone), may have emptied the station
+    // config and switched Wi-Fi storage to flash: put ReefDO's own state back.
+    sPaused = false;
+#if !CONFIG_REEFDO_QEMU
+    esp_wifi_set_storage(WIFI_STORAGE_RAM);
+    sApStarted = false;
+    Update([](Status& pS) { pS.apActive = false; });
+    sLastConnectedMs = esp_timer_get_time() / 1000; // two more minutes before the setup AP
+    if(!pJoined && ConfigureSta()) esp_wifi_connect();
+#else
+    static_cast<void>(pJoined);
+#endif
 }
 
 } // namespace net

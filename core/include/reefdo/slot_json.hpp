@@ -1,6 +1,6 @@
 #pragma once
-// A device's slot as JSON, shared by the config document and the status document (core-internal: config.cpp
-// writes it, api.cpp embeds it).
+// A device's slot as JSON, shared by the config document (config.cpp) and the gateway's status document
+// (gateway/src/views.cpp).
 #include <ArduinoJson.h>
 
 #include "reefdo/slot.hpp"

@@ -1,9 +1,9 @@
 # Invoked by the `coverage` target:
-#   cmake -DTEST_EXE=... -DLLVM_BIN=... -DOUT_DIR=... -DSOURCE_ROOT=... -P coverage.cmake
+#   cmake -DTEST_EXE=... -DLLVM_BIN=... -DOUT_DIR=... -DSOURCE_ROOTS=<dir>,<dir> -P coverage.cmake
 # Runs the instrumented test binary, merges the raw profile, produces a text report and an
-# HTML tree, and fails unless core/src (+ headers) is at 100 % lines and 100 % branches.
+# HTML tree, and fails unless every root's src/ (+ headers) is at 100 % lines and 100 % branches.
 
-foreach(v TEST_EXE LLVM_BIN OUT_DIR SOURCE_ROOT)
+foreach(v TEST_EXE LLVM_BIN OUT_DIR SOURCE_ROOTS)
   if(NOT DEFINED ${v})
     message(FATAL_ERROR "coverage.cmake: ${v} not set")
   endif()
@@ -25,7 +25,12 @@ if(NOT rc EQUAL 0)
   message(FATAL_ERROR "coverage: llvm-profdata merge failed (${rc})")
 endif()
 
-file(GLOB_RECURSE sources "${SOURCE_ROOT}/src/*.cpp" "${SOURCE_ROOT}/include/*.hpp")
+string(REPLACE "," ";" roots "${SOURCE_ROOTS}") # a CMake list does not survive add_custom_target and cmd
+set(sources)
+foreach(root ${roots})
+  file(GLOB_RECURSE found "${root}/src/*.cpp" "${root}/include/*.hpp")
+  list(APPEND sources ${found})
+endforeach()
 
 execute_process(
   COMMAND "${LLVM_BIN}/llvm-cov" report "${TEST_EXE}" "-instr-profile=${profdata}" ${sources}

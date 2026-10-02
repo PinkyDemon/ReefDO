@@ -1,5 +1,5 @@
 #pragma once
-// HTTP server: the embedded web UI plus /api/* over the core's api module. Writes need Basic auth
+// HTTP server: the embedded web UI, OTA upload, and /api/* handed to the gateway's router. Writes need Basic auth
 // (user "reef", password from NVS, default "reefdo"); OTA additionally needs maintenance mode.
 #include <string_view>
 

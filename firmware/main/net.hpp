@@ -24,5 +24,11 @@ Status GetStatus();
 bool SetCredentials(std::string_view pSsid, std::string_view pPassword); // persisted; reconnects
 void Forget();                                                           // drop credentials, raise the AP
 bool HasCredentials();
+// Keeps credentials the phone app's provisioning already joined with: persisted, no reconnect.
+bool RememberCredentials(std::string_view pSsid, std::string_view pPassword);
+// Around the phone app's link window: the provisioning manager drives the station meanwhile. pJoined: it joined
+// a network with credentials the app sent (already remembered); otherwise ReefDO's own are restored.
+void PauseStation();
+void ResumeStation(bool pJoined);
 
 } // namespace net

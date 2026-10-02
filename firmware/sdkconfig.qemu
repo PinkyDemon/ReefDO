@@ -1,0 +1,16 @@
+# On top of sdkconfig.defaults, for Espressif's QEMU only (never for a board):
+#   tools\idfenv.cmd idf.py -C firmware -B firmware/build-qemu -D SDKCONFIG=build-qemu/sdkconfig
+#       -D "SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.qemu" build
+CONFIG_REEFDO_QEMU=y
+# QEMU emulates UART0, not the S3's USB-Serial-JTAG
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=n
+# The network: QEMU's emulated Ethernet MAC (user-mode networking on the host)
+CONFIG_ETH_ENABLED=y
+CONFIG_ETH_USE_OPENETH=y
+CONFIG_ETH_OPENETH_DMA_RX_BUFFER_NUM=4
+CONFIG_ETH_OPENETH_DMA_TX_BUFFER_NUM=1
+# No rollback bookkeeping for an emulator image
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=n
+# No Bluetooth in QEMU: the board cannot be linked there, the cloud stays "not linked"
+CONFIG_BT_ENABLED=n

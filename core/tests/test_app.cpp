@@ -82,6 +82,8 @@ TEST_CASE("night_crash: Blue at night corrects the sag with the Blue devices, th
     REQUIRE(n != nullptr);
     REQUIRE(n->level == Level::Blue);
     REQUIRE_FALSE(n->urgent);
+    REQUIRE(n->value > 5.0f); // the DO it entered Blue at
+    REQUIRE(n->value < 5.95f);
     REQUIRE(s.NotesOf(NotifyKind::Level) == 1);
     REQUIRE(s.NotesOf(NotifyKind::Fault) == 0);
     REQUIRE(s.app.GetStatus().doMgl.value() < 5.95f);
@@ -176,6 +178,7 @@ TEST_CASE("fast_crash_straight_to_red: Red is immediate, urgent, repeats every 2
     s.RunS(10 * 60 + 30);
     REQUIRE(s.NotesOf(NotifyKind::Level) == before + 5);
     REQUIRE(s.LastNote(NotifyKind::Level)->repeat);
+    REQUIRE(s.LastNote(NotifyKind::Level)->value > 0.0f); // a repeat says the DO now
 }
 
 TEST_CASE("sudden_drop: a step fall is suspect, logged with its slope and flagged; Red waits extend_s", "[app]")
@@ -226,10 +229,17 @@ TEST_CASE(
     "[app]")
 {
     reefdo::config::Config c = ExampleConfig();
-    c.test.noFailAboveMgl = 0.0f; // this tank sits above saturation: judge every miss
+    c.test.noFailAboveMgl = 0.0f; // judge every miss
     Scenario s(c);
     s.Start();
-    s.RunUntil(21, 5);
+    // Only a rise counts, and this tank sits above saturation by day: each evening it starts below 100 %.
+    const auto evening = [&s]
+    {
+        s.RunUntil(19, 15);
+        s.tank.SetSat(88.0f);
+        s.RunUntil(21, 5);
+    };
+    evening();
     REQUIRE(s.app.TestState().p.lastOutcome[0] == reefdo::selftest::Outcome::Pass);
     REQUIRE(s.app.TestState().p.lastOutcome[1] == reefdo::selftest::Outcome::Unchecked);
     REQUIRE(s.app.TestState().p.lastOutcome[2] == reefdo::selftest::Outcome::Pass);
@@ -242,7 +252,7 @@ TEST_CASE(
 
     // Next evening the airstone is clogged.
     s.tank.SetDeviceK(0, 0.0f);
-    s.RunUntil(21, 5);
+    evening();
     REQUIRE(s.app.TestState().p.lastOutcome[0] == reefdo::selftest::Outcome::Fail);
     REQUIRE(s.app.GetStatus().deviceFailed[0]);
     REQUIRE(s.NotesOf(NotifyKind::TestFail) == 1);
@@ -259,8 +269,7 @@ TEST_CASE(
     s.tank.SetSat(104.0f);
     s.RunUntil(13, 0);
     REQUIRE(s.app.GetStatus().level == Level::Normal);
-    s.tank.SetSat(
-        106.0f); // the check needs distance from 100 %: at 13:00 the tank has not yet climbed to its day equilibrium
+    s.tank.SetSat(88.0f); // well below 100 %, where a working bubbler raises it
     s.RunS(600);
     s.tank.SetDeviceK(0, 3.0f);
     s.app.RunTest();
@@ -480,15 +489,20 @@ TEST_CASE("A day without a single reading writes no daily record", "[app]")
     REQUIRE(s.app.LogD().Count() == 1); // only the first (partial) day
 }
 
-TEST_CASE("Heat: a warm day sets the heat flag on the samples", "[app]")
+TEST_CASE("A warm day is measured and logged; nothing switches for it", "[app]")
 {
     reefdo::sim::TankConfig t = ExampleTank();
-    t.tempDayC = 28.6f;
+    t.tempDayC = 29.5f;
     Scenario s(ExampleConfig(), t);
     s.Start();
     s.RunUntil(12, 0);
-    REQUIRE(s.app.GetStatus().heat);
-    REQUIRE((s.app.LogA().last()->flags & reefdo::app::FLAG_HEAT) != 0);
+    REQUIRE(s.app.GetStatus().tempC.value_or(0.0f) > 29.0f);
+    REQUIRE(s.app.LogA().last()->f2 > 29.0f);
+    REQUIRE((s.app.LogA().last()->flags & reefdo::app::FLAG_HEAT) == 0);
+    REQUIRE(s.app.GetStatus().level == Level::Normal);
+    for(std::size_t i = 0; i < reefdo::DEVICES; ++i)
+        REQUIRE(s.app.GetStatus().deviceWhy[i] ==
+                (i == 4 ? reefdo::app::DEMAND_LADDER : 0)); // the pulse device's power
 }
 
 TEST_CASE("Induced deficit cuts the return pump before the check; persistent test state can be restored", "[app]")
@@ -835,10 +849,12 @@ TEST_CASE("A clogged airstone in supersaturated water: unchecked, logged with it
 {
     Scenario s; // the default limit; the example tank sits around 104 % (~6.9 mg/L)
     s.Start();
+    s.RunUntil(19, 15);
+    s.tank.SetSat(88.0f); // below 100 % the airstone shows its rise
     s.RunUntil(21, 5);
     REQUIRE(s.app.TestState().p.lastOutcome[0] == reefdo::selftest::Outcome::Pass); // a pass is still a pass
     s.tank.SetDeviceK(0, 0.0f);
-    s.RunUntil(21, 5);
+    s.RunUntil(21, 5); // back at ~104 %: no rise, and too high to call that a failure
     REQUIRE(s.app.TestState().p.lastOutcome[0] == reefdo::selftest::Outcome::Unchecked);
     REQUIRE_FALSE(s.app.GetStatus().deviceFailed[0]);
     REQUIRE(s.NotesOf(NotifyKind::TestFail) == 0);
@@ -966,4 +982,74 @@ TEST_CASE("A failed test verdict can be cleared by hand, logged; it never change
     REQUIRE(cmds[0].aux == (11u | 2u << 8));
     s.Tick();
     REQUIRE_FALSE(st.deviceFailed[2]); // and it stays cleared
+}
+
+namespace
+{
+
+std::optional<reefdo::log::Record> LastOf(const reefdo::log::RecordLog& pLog, reefdo::log::Type pType)
+{
+    for(std::size_t i = pLog.Count(); i > 0; --i)
+    {
+        const std::optional<reefdo::log::Record> r = pLog.At(i - 1);
+        if(r.has_value() && r->type == pType) return r;
+    }
+    return std::nullopt;
+}
+
+} // namespace
+
+TEST_CASE("Alert suspend: the alert stands down, the level and the log stay; no repeat pushes meanwhile", "[app]")
+{
+    using reefdo::ladder::EventType;
+    using reefdo::ladder::ResumeReason;
+    Scenario s;
+    s.Start();
+    s.RunS(600);
+    REQUIRE_FALSE(s.app.SuspendAlerts(600)); // Normal: nothing to suspend
+    REQUIRE_FALSE(s.app.SuspendAlerts(0));   // nothing to resume
+    s.tank.SetSat(55.0f);
+    s.RunS(120);
+    REQUIRE(s.app.GetStatus().level == Level::Red);
+    REQUIRE_FALSE(s.app.SuspendAlerts(reefdo::ladder::ALERT_SUSPEND_MAX_S + 1));
+    REQUIRE(s.app.SuspendAlerts(1800));
+    s.Tick();
+    const reefdo::app::Status& st = s.app.GetStatus();
+    REQUIRE(st.alertsSuspended);
+    REQUIRE(st.alertsSuspendLeftS == 1800);
+    REQUIRE(st.level == Level::Red); // shown as it is
+    REQUIRE_FALSE(st.sound);
+    for(std::size_t i = 0; i < 4; ++i)
+        REQUIRE_FALSE(st.deviceOn[i]);
+    REQUIRE(st.deviceOn[4]); // the return pump keeps its power
+    const std::optional<reefdo::log::Record> ev = LastOf(s.app.LogE(), reefdo::log::Type::Event);
+    REQUIRE((ev->aux & 0xFFu) == static_cast<uint32_t>(EventType::AlertSuspend));
+    REQUIRE(ev->f1 == 1800.0f);
+    s.Tick();
+    REQUIRE((LastOf(s.app.LogA(), reefdo::log::Type::Measurement)->flags & reefdo::app::FLAG_ALERTS_SUSPENDED) != 0);
+
+    const std::size_t before = s.NotesOf(NotifyKind::Level);
+    s.tank.SetSat(55.0f);
+    s.RunS(10 * 60 + 30);
+    REQUIRE(s.NotesOf(NotifyKind::Level) == before); // Red would repeat every 2 min
+
+    REQUIRE(s.app.SuspendAlerts(0));
+    s.Tick();
+    REQUIRE_FALSE(s.app.GetStatus().alertsSuspended);
+    REQUIRE(s.app.GetStatus().sound);
+    REQUIRE(s.app.GetStatus().deviceOn[0]);
+    const std::optional<reefdo::log::Record> back = LastOf(s.app.LogE(), reefdo::log::Type::Event);
+    REQUIRE((back->aux & 0xFFu) == static_cast<uint32_t>(EventType::AlertResume));
+    REQUIRE(back->f1 == static_cast<float>(ResumeReason::Hand));
+}
+
+TEST_CASE("Alert suspend is refused in a FAULT", "[app]")
+{
+    Scenario s;
+    s.Start();
+    s.RunS(600);
+    s.probe.Model().dropout = true;
+    s.RunS(120);
+    REQUIRE(s.app.GetStatus().fault);
+    REQUIRE_FALSE(s.app.SuspendAlerts(600));
 }

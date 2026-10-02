@@ -36,7 +36,7 @@ struct Bench
     uint32_t day = 20'000;
     uint32_t secOfDay = 19 * 3600; // 19:00
     bool clockKnown = true;
-    float sat = 108.0f;
+    float sat = 92.0f;
     float doMgl = 5.0f;
     Level level = Level::Normal;
     bool fault = false;
@@ -101,8 +101,8 @@ struct Bench
             if(it->type == pT) return &*it;
         return nullptr;
     }
-    // Tank that responds to devices 0 and 2 (falling toward 100 %), not to device 1.
-    void ResponsiveTank(float pPerTick0 = -0.05f, float pPerTick2 = -0.05f)
+    // Tank that responds to devices 0 and 2 (raising saturation toward 100 %), not to device 1.
+    void ResponsiveTank(float pPerTick0 = 0.05f, float pPerTick2 = 0.05f)
     {
         tank = [this, pPerTick0, pPerTick2](const Output& pO)
         {
@@ -182,7 +182,7 @@ TEST_CASE("A scheduled run starts at the window with headroom and walks the devi
 TEST_CASE("A device with no measurable response fails; a later pass clears the alert", "[selftest]")
 {
     Bench b;
-    b.ResponsiveTank(-0.005f, -0.05f); // bubbler: 0.15 % over 300 s — below the 1 % it must show
+    b.ResponsiveTank(0.005f, 0.05f); // bubbler: 0.15 % over 300 s — below the 1 % it must show
     b.GotoTime(19, 30);
     b.RunFor(1400);
     REQUIRE(b.Count(EventType::RunEnd) == 1);
@@ -214,7 +214,7 @@ TEST_CASE("A miss that starts at or above no_fail_above_mgl is unchecked, not a 
         Bench b;
         b.cfg.noFailAboveMgl = pLimit;
         b.doMgl = pDoMgl;
-        b.ResponsiveTank(-0.005f, -0.05f); // the bubbler misses its 1 %, the strong pump passes
+        b.ResponsiveTank(0.005f, 0.05f); // the bubbler misses its 1 %, the strong pump passes
         b.GotoTime(19, 30);
         b.RunFor(1400);
         return b;
@@ -251,7 +251,7 @@ TEST_CASE("A miss that starts at or above no_fail_above_mgl is unchecked, not a 
 TEST_CASE("The pre-run trend is subtracted from the response", "[selftest]")
 {
     Bench b;
-    b.tank = [&b](const Output&) { b.sat -= 0.01f; }; // falling 0.6 %/10 min all evening, devices do nothing
+    b.tank = [&b](const Output&) { b.sat += 0.01f; }; // rising 0.6 %/10 min all evening, devices do nothing
     b.GotoTime(19, 30);
     b.RunFor(1400);
     const Event* e = b.last(EventType::DeviceEnd);
@@ -283,7 +283,7 @@ TEST_CASE("No headroom: the run waits, then starts at the latest fitting time an
         c.sat = 100.5f;
         c.GotoTime(19, 50);
         REQUIRE(c.Count(EventType::RunStart) == 0);
-        c.sat = 104.0f;
+        c.sat = 96.0f;
         c.Tick();
         REQUIRE(c.Count(EventType::RunStart) == 1);
         REQUIRE(c.last(EventType::RunStart)->judged);
@@ -306,7 +306,7 @@ TEST_CASE("Five inconclusive evenings raise the alert once; a judged run resets 
     b.GotoTime(20, 38);
     b.RunFor(1400);
     REQUIRE(b.Count(EventType::InconclusiveAlert) == 1); // not repeated while standing
-    b.sat = 106.0f;
+    b.sat = 94.0f;
     b.ResponsiveTank();
     b.GotoTime(19, 30);
     b.RunFor(1400);
@@ -372,9 +372,11 @@ TEST_CASE("Skips: not Normal, FAULT, maintenance, nothing to run", "[selftest]")
 TEST_CASE("Run now starts at any time and does not count as the day's scheduled run", "[selftest]")
 {
     Bench b;
-    b.sat = 110.0f;
+    b.sat = 90.0f;
+    b.secOfDay = 18 * 3600 + 30 * 60;
     b.ResponsiveTank();
-    Output o = b.Tick(true); // 19:00, outside the window
+    b.RunFor(600);           // the trend it is judged against
+    Output o = b.Tick(true); // 18:40, outside the window
     REQUIRE(o.running);
     REQUIRE(o.chirp);
     b.RunFor(1400);
@@ -506,7 +508,7 @@ TEST_CASE("A probe dropout at device start makes that device inconclusive", "[se
 TEST_CASE("Persistent state survives a reboot: no second run today, fail flags kept", "[selftest]")
 {
     Bench b;
-    b.ResponsiveTank(-0.005f, -0.05f);
+    b.ResponsiveTank(0.005f, 0.05f);
     b.GotoTime(19, 30);
     b.RunFor(1400);
     REQUIRE(b.st.p.failActive[0]);
@@ -671,4 +673,74 @@ TEST_CASE("A tested device out of order ends a run unjudged, or skips it; an unt
     c.GotoTime(19, 30);
     REQUIRE(c.Count(EventType::RunStart) == 0);
     REQUIRE(c.last(EventType::Skipped)->skip == Skip::DeviceOut);
+}
+
+TEST_CASE("Only a rise counts: a device that lowers saturation has shown nothing, at any saturation", "[selftest]")
+{
+    // Air in supersaturated water strips oxygen: the device works as an air pump, but it has not shown it can raise
+    // DO, and for an oxygen diffuser or a lit algae reactor a fall would be a plain failure.
+    const auto evening = [](float pDoMgl)
+    {
+        Bench b;
+        b.sat = 113.0f;
+        b.doMgl = pDoMgl;
+        b.ResponsiveTank(-0.05f, 0.05f); // device 0 pulls saturation down, device 2 pushes it up
+        b.GotoTime(19, 30);
+        b.RunFor(1400);
+        return b;
+    };
+    const auto end = [](const Bench& pB, uint8_t pDevice)
+    {
+        const Event* found = nullptr;
+        for(const Event& e : pB.events)
+            if(e.type == EventType::DeviceEnd && e.device == pDevice) found = &e;
+        REQUIRE(found != nullptr);
+        return *found;
+    };
+    const Bench low = evening(5.0f);
+    REQUIRE(end(low, 0).outcome == Outcome::Fail);
+    REQUIRE(end(low, 0).response == 0.0f);
+    REQUIRE(end(low, 2).outcome == Outcome::Pass); // a rise above 100 % still counts
+    const Bench high = evening(7.7f);              // above no_fail_above_mgl the miss is unchecked
+    REQUIRE(end(high, 0).outcome == Outcome::Unchecked);
+    REQUIRE(end(high, 0).highDo);
+}
+
+TEST_CASE("After a boot the run waits for 9 minutes of trend; Run now meanwhile is not judged", "[selftest]")
+{
+    Bench b; // booted at 19:35, inside the window, with headroom
+    b.secOfDay = 19 * 3600 + 35 * 60;
+    b.ResponsiveTank();
+    b.RunFor(530);
+    REQUIRE(b.Count(EventType::RunStart) == 0);
+    b.RunFor(20);
+    REQUIRE(b.Count(EventType::RunStart) == 1);
+    b.RunFor(1400);
+    REQUIRE(b.st.p.lastOutcome[0] == Outcome::Pass);
+
+    Bench c; // Run now right after a boot: it runs, but nothing is judged without a trend
+    c.ResponsiveTank();
+    REQUIRE(c.Tick(true).running);
+    c.RunFor(1400);
+    REQUIRE(c.st.p.lastOutcome[0] == Outcome::Inconclusive);
+    REQUIRE(c.Count(EventType::FailAlert) == 0);
+}
+
+TEST_CASE("Unknown clock: the 24 h start waits for the trend too, after a probe gap", "[selftest]")
+{
+    Bench c;
+    c.ResponsiveTank();
+    c.GotoTime(19, 30);
+    c.RunFor(1400);
+    REQUIRE(c.Count(EventType::RunStart) == 1);
+    c.clockKnown = false;
+    c.RunFor(86400 - 1400 - 1200);
+    c.probeOk = false; // the probe is gone for 20 minutes across the 24 h mark
+    c.RunFor(1200);
+    c.probeOk = true;
+    c.RunFor(530);
+    REQUIRE(c.Count(EventType::RunStart) == 1);
+    c.RunFor(20);
+    REQUIRE(c.Count(EventType::RunStart) == 2);
+    REQUIRE(c.last(EventType::RunStart)->clockUnknown);
 }

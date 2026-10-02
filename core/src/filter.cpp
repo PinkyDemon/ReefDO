@@ -58,12 +58,15 @@ void SlopeEstimator::Reset()
     mHead = 0;
 }
 
+uint64_t SlopeEstimator::SpanMs() const
+{
+    return mN < 2 ? 0 : mT[(mHead + mN - 1) % CAPACITY] - mT[mHead];
+}
+
 float SlopeEstimator::SlopePer10min() const
 {
-    if(mN < 2) return 0.0f;
+    if(SpanMs() < MIN_SPAN_MS) return 0.0f;
     const uint64_t t0 = mT[mHead];
-    const uint64_t tLast = mT[(mHead + mN - 1) % CAPACITY];
-    if(tLast - t0 < MIN_SPAN_MS) return 0.0f;
 
     // Ordinary least squares, times relative to the oldest sample (seconds), in double.
     double sx = 0;

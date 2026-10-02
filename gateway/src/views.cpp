@@ -1,4 +1,4 @@
-#include "reefdo/api.hpp"
+#include "reefdo/gateway/views.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -6,12 +6,11 @@
 
 #include <ArduinoJson.h>
 
+#include "reefdo/slot_json.hpp"
 #include "reefdo/solubility.hpp"
 #include "reefdo/version.hpp"
 
-#include "slot_json.hpp"
-
-namespace reefdo::api
+namespace reefdo::gateway
 {
 
 using ladder::Level;
@@ -62,7 +61,7 @@ std::optional<std::size_t> DeviceIndex(JsonVariantConst pO, Command& pCmd)
     return dev.as<uint32_t>() - 1;
 }
 
-// {"device":n,"s":seconds} for suspend; nullopt with the message set when the field is unusable.
+// {"s":seconds} for suspend and suspend_alerts; nullopt with the message set when the field is unusable.
 std::optional<uint32_t> Seconds(JsonVariantConst pO, Command& pCmd)
 {
     if(!pO["s"].is<uint32_t>())
@@ -125,7 +124,8 @@ std::size_t StatusJson(const app::App& pApp, const app::Clock& pClock, std::span
     lad["silenced"] = s.silenced;
     lad["suppressed"] = s.suppressed; // day_alarm suppress in effect
     lad["suspect"] = s.suspect;       // a sudden drop: dwells extended by sudden_drop.extend_s
-    lad["heat"] = s.heat;
+    lad["alerts_suspended"] = s.alertsSuspended;
+    lad["alerts_suspend_s"] = s.alertsSuspendLeftS; // until it resumes by itself; 0 when not suspended
     lad["maintenance"] = s.maintenance;
     lad["maintenance_s"] = s.maintenanceLeftS; // until it ends by itself; 0 when off
     // What the buzzer plays now: the configured pattern of the state shown, when the ladder lets it sound.
@@ -325,6 +325,29 @@ Command ApplyCommand(app::App& pApp, std::string_view pJson, const app::Clock& p
         cmd.message = !cmd.ok ? "at most 7200 s" : *secs > 0 ? "device suspended" : "device resumed";
         return cmd;
     }
+    const JsonVariantConst alerts = root["suspend_alerts"];
+    if(alerts.is<JsonObjectConst>())
+    {
+        const std::optional<uint32_t> secs = Seconds(alerts, cmd);
+        if(!secs.has_value()) return cmd;
+        // "level": what the asker saw; a deeper level now refuses (a phone may show an older one).
+        std::optional<Level> seen;
+        const JsonVariantConst level = alerts["level"];
+        for(uint8_t l = 0; l <= 3 && !level.isNull(); ++l)
+            if(level.is<const char*>() &&
+               std::strcmp(level.as<const char*>(), config::Name(static_cast<Level>(l))) == 0)
+                seen = static_cast<Level>(l);
+        if(!level.isNull() && !seen.has_value())
+        {
+            cmd.message = "level must be normal, blue, yellow or red";
+            return cmd;
+        }
+        cmd.ok = pApp.SuspendAlerts(*secs, seen);
+        cmd.message = cmd.ok      ? (*secs > 0 ? "alerts suspended" : "alerts resumed")
+                      : *secs > 0 ? "no alert to suspend, a FAULT, over 3600 s, or deeper than shown"
+                                  : "no alert is suspended";
+        return cmd;
+    }
     const JsonVariantConst manual = root["manual"];
     if(manual.is<JsonObjectConst>())
     {
@@ -438,4 +461,4 @@ std::size_t SeriesCsv(const app::App& pApp, char pTier, uint32_t pFromTs, uint32
     return n;
 }
 
-} // namespace reefdo::api
+} // namespace reefdo::gateway

@@ -5,12 +5,12 @@
 #include "catch_amalgamated.hpp"
 #include <ArduinoJson.h>
 
-#include "reefdo/api.hpp"
+#include "reefdo/gateway/views.hpp"
 
 #include "scenario.hpp"
 
 using namespace scenario;
-using namespace reefdo::api;
+using namespace reefdo::gateway;
 using reefdo::log::Type;
 
 namespace
@@ -132,6 +132,8 @@ TEST_CASE("test_json reports outcomes, responses and the run duration", "[api]")
     REQUIRE(d["devices"][0]["last_outcome"] == "none");
     REQUIRE(d["no_fail_above_mgl"].as<float>() == Catch::Approx(6.1f));
     REQUIRE(d["last_run_day"].isNull());
+    s.RunUntil(19, 15);
+    s.tank.SetSat(88.0f); // below 100 %, where the bubbler's rise counts
     s.RunUntil(21, 5);
     REQUIRE(TestJson(s.app, buf) > 0);
     d = Parse(std::string(buf.data()));
@@ -491,4 +493,58 @@ TEST_CASE("The slot schema describes every slot type's parameters for the page, 
 
     char tiny[64];
     REQUIRE(reefdo::config::SlotSchema(tiny) == 0);
+}
+
+TEST_CASE("apply_command: suspend_alerts, its refusals, and the status it shows", "[api]")
+{
+    Scenario s;
+    s.Start();
+    s.RunS(600);
+    Command c = ApplyCommand(s.app, R"({"suspend_alerts":{"s":600}})", s.clock);
+    REQUIRE_FALSE(c.ok);
+    REQUIRE(std::string(c.message) == "no alert to suspend, a FAULT, over 3600 s, or deeper than shown");
+    c = ApplyCommand(s.app, R"({"suspend_alerts":{"s":0}})", s.clock);
+    REQUIRE_FALSE(c.ok);
+    REQUIRE(std::string(c.message) == "no alert is suspended");
+    REQUIRE(std::string(ApplyCommand(s.app, R"({"suspend_alerts":{}})", s.clock).message) ==
+            "s must be a number of seconds (0 ends it)");
+
+    s.tank.SetSat(55.0f);
+    s.RunS(120);
+    c = ApplyCommand(s.app, R"({"suspend_alerts":{"s":1800}})", s.clock);
+    REQUIRE(c.ok);
+    REQUIRE(std::string(c.message) == "alerts suspended");
+    s.Tick();
+    JsonDocument d = Parse(Status(s));
+    REQUIRE(d["ladder"]["alerts_suspended"] == true);
+    REQUIRE(d["ladder"]["alerts_suspend_s"] == 1800);
+    REQUIRE(d["ladder"]["level"] == "red");
+    c = ApplyCommand(s.app, R"({"suspend_alerts":{"s":0}})", s.clock);
+    REQUIRE(c.ok);
+    REQUIRE(std::string(c.message) == "alerts resumed");
+    s.Tick();
+    d = Parse(Status(s));
+    REQUIRE(d["ladder"]["alerts_suspended"] == false);
+    REQUIRE(d["ladder"]["alerts_suspend_s"] == 0);
+}
+
+TEST_CASE("apply_command: suspend_alerts carries the level the asker saw", "[api]")
+{
+    Scenario s;
+    s.Start();
+    s.RunS(600);
+    s.tank.SetSat(55.0f);
+    s.RunS(120);
+    REQUIRE(s.app.GetStatus().level == Level::Red);
+    Command c = ApplyCommand(s.app, R"({"suspend_alerts":{"s":600,"level":"yellow"}})", s.clock);
+    REQUIRE_FALSE(c.ok); // it is Red now: worse than what was seen
+    REQUIRE(std::string(c.message) == "no alert to suspend, a FAULT, over 3600 s, or deeper than shown");
+    REQUIRE_FALSE(ApplyCommand(s.app, R"({"suspend_alerts":{"s":600,"level":"normal"}})", s.clock).ok);
+    REQUIRE(std::string(ApplyCommand(s.app, R"({"suspend_alerts":{"s":600,"level":"purple"}})", s.clock).message) ==
+            "level must be normal, blue, yellow or red");
+    REQUIRE(std::string(ApplyCommand(s.app, R"({"suspend_alerts":{"s":600,"level":3}})", s.clock).message) ==
+            "level must be normal, blue, yellow or red");
+    REQUIRE(ApplyCommand(s.app, R"({"suspend_alerts":{"s":600,"level":"red"}})", s.clock).ok);
+    s.Tick();
+    REQUIRE(s.app.GetStatus().alertsSuspended);
 }

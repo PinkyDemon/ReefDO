@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.24)
 project(ReefDO VERSION 0.1.0 LANGUAGES CXX)
 
-# Host build: the hardware-independent core, its tests and (later) the simulator.
-# The firmware is a separate ESP-IDF project under firmware/ that consumes core/ as a component.
+# Host build: the hardware-independent core and gateway, their tests and (later) the simulator.
+# The firmware is a separate ESP-IDF project under firmware/ that consumes core/ and gateway/ as components.
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -26,8 +26,30 @@ if(REEFDO_COVERAGE)
 endif()
 
 add_subdirectory(core)
+add_subdirectory(gateway)
+if(NOT REEFDO_COVERAGE)
+  add_subdirectory(sim) # reefdo_sim: the App on the virtual tank, the page on localhost
+endif()
 
 if(REEFDO_BUILD_TESTS)
   enable_testing()
-  add_subdirectory(core/tests)
+  add_subdirectory(core/tests)    # defines reefdo_tests
+  add_subdirectory(gateway/tests) # adds its sources to it
+
+  if(REEFDO_COVERAGE)
+    get_filename_component(_llvm_bin "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    # `cmake --build --preset coverage` runs the tests instrumented, merges the profile,
+    # writes coverage/report.txt + coverage/html/, and fails unless core/ and gateway/ are at
+    # 100 % lines AND 100 % branches. Pure CMake script; no shell, no Python.
+    add_custom_target(coverage
+      COMMAND ${CMAKE_COMMAND}
+        -DTEST_EXE=$<TARGET_FILE:reefdo_tests>
+        -DLLVM_BIN=${_llvm_bin}
+        -DOUT_DIR=${CMAKE_BINARY_DIR}/coverage
+        -DSOURCE_ROOTS=${CMAKE_SOURCE_DIR}/core,${CMAKE_SOURCE_DIR}/gateway
+        -P ${CMAKE_SOURCE_DIR}/cmake/coverage.cmake
+      DEPENDS reefdo_tests
+      USES_TERMINAL
+      COMMENT "Running tests under llvm-cov and gating at 100 % line + branch coverage")
+  endif()
 endif()

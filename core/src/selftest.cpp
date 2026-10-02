@@ -13,6 +13,7 @@ constexpr uint64_t Ms(uint32_t pS)
     return static_cast<uint64_t>(pS) * 1000u;
 }
 constexpr uint64_t DAY_MS = 24ull * 3600u * 1000u;
+constexpr uint64_t TREND_MS = 540'000; // a device is judged against the tank's own trend: 9 of its 10 minutes first
 
 std::size_t NextTested(const Config& pCfg, std::size_t pFrom)
 {
@@ -47,6 +48,12 @@ bool TestedOut(const Input& pIn, const Config& pCfg)
     return false;
 }
 
+// The current sample was pushed first (Step), so the window ends now: a trend from before a probe gap is not ready.
+bool TrendReady(const State& pS, const Input& pIn)
+{
+    return pIn.satPct.has_value() && pS.slope.SpanMs() >= TREND_MS;
+}
+
 bool HasHeadroom(std::optional<float> pSat, const Config& pCfg)
 {
     return pSat.has_value() && std::fabs(*pSat - 100.0f) >= pCfg.minHeadroomPct;
@@ -63,7 +70,7 @@ bool ScheduledDue(State& pS, const Input& pIn, const Config& pCfg, Output& pOut)
     if(!pIn.local.has_value())
     {
         // Clock unknown: 24 h (monotonic) after the previous run lands in the same window if that one was scheduled.
-        if(pS.lastRunMs.has_value() && pIn.nowMs - *pS.lastRunMs >= DAY_MS)
+        if(pS.lastRunMs.has_value() && pIn.nowMs - *pS.lastRunMs >= DAY_MS && TrendReady(pS, pIn))
         {
             pS.clockUnknown = true;
             return true;
@@ -82,6 +89,7 @@ bool ScheduledDue(State& pS, const Input& pIn, const Config& pCfg, Output& pOut)
         Emit(pOut, e);
         return false;
     }
+    if(!TrendReady(pS, pIn)) return false; // after a boot or a probe gap: the trend first
     // Latest start that still finishes inside the window; before that, only start once there is headroom to measure.
     const uint32_t needMin = (RunDurationS(pCfg) + 59) / 60;
     const uint32_t spanMin = static_cast<uint32_t>(pCfg.windowEndMin - pCfg.windowStartMin);
@@ -110,7 +118,7 @@ void BeginDevice(State& pS, const Input& pIn, const Config& pCfg, std::size_t pI
         Emit(pOut, e);
         pOut.chirp = pCfg.chirp;
     }
-    pS.deviceJudged = pS.judged && pIn.satPct.has_value();
+    pS.deviceJudged = pS.judged && TrendReady(pS, pIn); // Run now after a boot
     Event e{EventType::DeviceStart};
     e.device = static_cast<uint8_t>(pI);
     Emit(pOut, e);
@@ -120,8 +128,10 @@ void Measure(State& pS, const Input& pIn)
 {
     if(!pIn.satPct.has_value()) return;
     const float t10 = static_cast<float>(pIn.nowMs - pS.deviceStartedMs) / 600000.0f;
-    const float dev = std::fabs(*pIn.satPct - (pS.sat0 + pS.slope0 * t10));
-    if(dev > pS.peak) pS.peak = dev;
+    // Only a rise above the tank's own trend: a device that lowers oxygen (air in supersaturated water, a dark
+    // reactor) has not shown that it can raise it.
+    const float rise = *pIn.satPct - (pS.sat0 + pS.slope0 * t10);
+    if(rise > pS.peak) pS.peak = rise;
 }
 
 void EndDevice(State& pS, const Config& pCfg, Output& pOut)

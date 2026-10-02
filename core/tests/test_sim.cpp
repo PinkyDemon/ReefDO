@@ -157,3 +157,17 @@ TEST_CASE("Probe model: every fault knob", "[sim]")
     fresh.Model().stuck = true;
     REQUIRE(fresh.Poll().status == Status::Ok);
 }
+
+TEST_CASE("Tank: the night-time demand can be changed while it runs", "[sim]")
+{
+    TankConfig c;
+    c.kFlowPerH = 0.0f;
+    c.sat0Pct = 80.0f;
+    Tank t(c);
+    t.SetNightRespiration(0.0f);
+    t.Step(3600.0f, 2 * 60, ALL_OFF); // 02:00: no demand, no exchange
+    REQUIRE_THAT(t.SatPct(), WithinAbs(80.0, 1e-4));
+    t.SetNightRespiration(10.0f);
+    t.Step(3600.0f, 2 * 60, ALL_OFF);
+    REQUIRE_THAT(t.SatPct(), WithinAbs(70.0, 1e-4));
+}

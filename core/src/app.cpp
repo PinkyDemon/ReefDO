@@ -162,10 +162,13 @@ void App::LogLadderEvents(const Clock& pClock, const ladder::Output& pOut, float
         r.aux = static_cast<uint32_t>(e.type) | (static_cast<uint32_t>(e.device) << 8);
         r.f0 = pDoNow;
         if(e.type == ladder::EventType::SuddenDrop) r.f1 = mStatus.fastSlopeMglPer10min;
+        if(e.type == ladder::EventType::AlertSuspend || e.type == ladder::EventType::AlertResume)
+            r.f1 = static_cast<float>(e.detail);
         Write(r, true);
         ++mDaily.events;
 
         Notification n{NotifyKind::Level};
+        n.value = pDoNow; // the DO the event happened at
         switch(e.type)
         {
             case ladder::EventType::LevelChange:
@@ -253,12 +256,13 @@ void App::LogTestEvents(const Clock& pClock, const selftest::Output& pOut)
 void App::AlertRepeat(const Clock& pClock)
 {
     const bool alarm = mStatus.fault || mStatus.level >= Level::Yellow;
-    if(!alarm || mStatus.silenced || mStatus.maintenance) return;
+    if(!alarm || mStatus.silenced || mStatus.maintenance || mStatus.alertsSuspended) return;
     const bool loud = mStatus.fault || mStatus.level == Level::Red; // FAULT repeats like Red
     if(pClock.nowMs - mLastAlertNotifyMs < (loud ? RED_REPEAT_MS : YELLOW_REPEAT_MS)) return;
     mLastAlertNotifyMs = pClock.nowMs;
     Notification n{mStatus.fault ? NotifyKind::Fault : NotifyKind::Level};
     n.level = mStatus.fault ? mCfg.ladder.faultLevel : mStatus.level;
+    n.value = mStatus.doMgl.value_or(0.0f);
     n.urgent = true;
     n.repeat = true;
     Notify(n);
@@ -344,19 +348,21 @@ void App::Tick(const Clock& pClock)
     li.doMgl = pr.status == probe::Status::Stuck ? std::nullopt : doMed; // a frozen value is not a reading
     li.slopeMglPer10min = mStatus.slopeMglPer10min;
     li.fastSlopeMglPer10min = mStatus.fastSlopeMglPer10min;
-    li.tempC = pr.reading.has_value() ? std::optional<float>(pr.reading->tempC) : std::nullopt;
     li.nowMs = pClock.nowMs;
     if(lt.has_value()) li.minuteOfDay = lt->minuteOfDay;
     li.ackPressed = mAckPending;
+    li.suspendAlertsS = mSuspendAlertsPending;
     li.maintenance = mStatus.maintenance;
     mAckPending = false;
+    mSuspendAlertsPending.reset();
     const ladder::Output lo = ladder::Step(mLadder, li, mCfg.ladder);
     mStatus.level = lo.level;
     mStatus.fault = lo.fault;
     mStatus.silenced = lo.silenced;
     mStatus.suppressed = lo.suppressed;
     mStatus.suspect = lo.suspect;
-    mStatus.heat = lo.heat;
+    mStatus.alertsSuspended = lo.alertsSuspended;
+    mStatus.alertsSuspendLeftS = lo.alertsSuspendLeftS;
     mStatus.sound = lo.sound;
 
     // 3. Self test
@@ -416,11 +422,11 @@ void App::Tick(const Clock& pClock)
         r.uptimeS = mStatus.uptimeS;
         r.type = log::Type::Measurement;
         r.level = static_cast<uint8_t>(lo.level);
-        r.flags = static_cast<uint16_t>((pr.status == probe::Status::Stuck ? FLAG_STUCK : 0) |
-                                        (mStatus.maintenance ? FLAG_MAINTENANCE : 0) |
-                                        (lo.silenced ? FLAG_SILENCED : 0) | (so.running ? FLAG_TEST_RUNNING : 0) |
-                                        (lo.heat ? FLAG_HEAT : 0) | (lt.has_value() ? 0 : FLAG_CLOCK_UNKNOWN) |
-                                        (AnySuspended() ? FLAG_SUSPENDED : 0) | (lo.suspect ? FLAG_SUSPECT : 0));
+        r.flags = static_cast<uint16_t>(
+            (pr.status == probe::Status::Stuck ? FLAG_STUCK : 0) | (mStatus.maintenance ? FLAG_MAINTENANCE : 0) |
+            (lo.silenced ? FLAG_SILENCED : 0) | (so.running ? FLAG_TEST_RUNNING : 0) |
+            (lt.has_value() ? 0 : FLAG_CLOCK_UNKNOWN) | (AnySuspended() ? FLAG_SUSPENDED : 0) |
+            (lo.suspect ? FLAG_SUSPECT : 0) | (lo.alertsSuspended ? FLAG_ALERTS_SUSPENDED : 0));
         r.f0 = *doMed;
         r.f1 = *satMed;
         r.f2 = pr.reading->tempC;
@@ -457,6 +463,16 @@ void App::Tick(const Clock& pClock)
 void App::Ack()
 {
     mAckPending = true;
+}
+
+bool App::SuspendAlerts(uint32_t pSeconds, std::optional<ladder::Level> pSeen)
+{
+    if(pSeconds > ladder::ALERT_SUSPEND_MAX_S) return false;
+    if(pSeconds > 0 && pSeen.has_value() && mStatus.level > *pSeen) return false;       // worse than what was seen
+    if(pSeconds > 0 && (mStatus.fault || mStatus.level == Level::Normal)) return false; // nothing to suspend
+    if(pSeconds == 0 && !mStatus.alertsSuspended) return false;                         // nothing to resume
+    mSuspendAlertsPending = pSeconds;
+    return true;
 }
 
 void App::SetMaintenance(bool pOn, const Clock& pClock)

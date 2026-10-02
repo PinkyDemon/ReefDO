@@ -5,6 +5,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "led_strip.h"
+#include "sdkconfig.h"
 
 namespace board
 {
@@ -15,6 +16,7 @@ namespace
 const char* const TAG = "board";
 bool sGRelay[RELAY_COUNT] = {};
 led_strip_handle_t sGStrip = nullptr;
+bool sGBuzzer = false; // set once the LEDC channel exists
 
 } // namespace
 
@@ -59,11 +61,13 @@ void InitBuzzer()
     channel.duty = 0;
     channel.hpoint = 0;
     ESP_ERROR_CHECK(ledc_channel_config(&channel));
+    sGBuzzer = true;
 }
 
 void BuzzerSet(bool pOn, uint32_t pHz, uint32_t pVolume)
 {
     static const uint32_t DUTY[] = {0, 12, 80, 512}; // of 1024; a passive buzzer is loudest at 50 %
+    if(!sGBuzzer) return;                            // not started (the QEMU build)
     if(pOn) ledc_set_freq(LEDC_LOW_SPEED_MODE, LEDC_TIMER_0, pHz);
     ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, pOn ? DUTY[pVolume > 3 ? 3 : pVolume] : 0);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
@@ -116,7 +120,11 @@ void InitButton()
 
 bool BootButtonPressed()
 {
+#if CONFIG_REEFDO_QEMU
+    return false; // QEMU reads the pin low: it would hold the button down for ever
+#else
     return gpio_get_level(BOOT_BUTTON_PIN) == 0;
+#endif
 }
 
 } // namespace board

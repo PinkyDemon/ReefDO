@@ -1,5 +1,7 @@
 # ReefDO partition table for the 16 MB flash
 # The four log rings live on raw partitions (custom data subtypes): fixed-size records, no filesystem.
+# fctry: the phone app's device certificate (ESP RainMaker Neo, written when the board is linked). A board with
+# an older table has none and runs without the cloud; `factory yes` erases nvs only, never fctry.
 # Name,     Type, SubType,  Offset,   Size,     Flags
 nvs,        data, nvs,      0x9000,   0x10000,
 otadata,    data, ota,      0x19000,  0x2000,
@@ -11,3 +13,4 @@ loga,       data, 0x40,     0x630000, 0x500000,
 logb,       data, 0x41,     0xB30000, 0x400000,
 loge,       data, 0x42,     0xF30000, 0x40000,
 logd,       data, 0x43,     0xF70000, 0x40000,
+fctry,      data, nvs,      0xFB0000, 0x6000,

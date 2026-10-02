@@ -5,9 +5,10 @@
 #include <cstring>
 #include <string_view>
 
-#include "reefdo/api.hpp"
+#include "reefdo/gateway/views.hpp"
 
 #include "board.hpp"
+#include "cloud_link.hpp"
 #include "esp_app_desc.h"
 #include "esp_console.h"
 #include "esp_heap_caps.h"
@@ -16,7 +17,6 @@
 #include "hal/nvs_store.hpp"
 #include "indicator.hpp"
 #include "net.hpp"
-#include "notify.hpp"
 #include "sampler.hpp"
 #include "tuya_link.hpp"
 #include "web.hpp"
@@ -36,7 +36,7 @@ const char* const OUTCOME[] = {"-", "pass", "FAIL", "inconclusive", "unchecked"}
 constexpr int DEVICE_COUNT = static_cast<int>(reefdo::DEVICES);
 
 // One buffer for every JSON document the console prints (the console runs on one task).
-char sBuf[reefdo::api::JSON_MAX];
+char sBuf[reefdo::gateway::JSON_MAX];
 
 bool Is(const char* pA, const char* pB)
 {
@@ -66,7 +66,7 @@ std::string_view JoinJson(int pArgc, char** pArgv, int pFrom, char* pBuf, std::s
     return {pBuf, n};
 }
 
-class StdoutSink : public reefdo::api::ISink
+class StdoutSink : public reefdo::gateway::ISink
 {
 public:
     bool Write(std::string_view pChunk) override
@@ -82,7 +82,7 @@ int CmdStatus(int pArgc, char** pArgv)
     const reefdo::app::Clock clock = sampler::ClockNow();
     if(pArgc == 2 && Is(pArgv[1], "json"))
     {
-        const std::size_t n = reefdo::api::StatusJson(app, clock, sBuf);
+        const std::size_t n = reefdo::gateway::StatusJson(app, clock, sBuf);
         std::printf("%.*s\n", static_cast<int>(n), sBuf);
         return 0;
     }
@@ -105,12 +105,15 @@ int CmdStatus(int pArgc, char** pArgv)
         std::printf("DO --  probe status %d, %lu consecutive failures\n", static_cast<int>(s.probe),
                     static_cast<unsigned long>(s.consecutiveFailures));
     }
-    std::printf("level %s%s%s%s%s%s%s\n", LEVEL[static_cast<int>(s.level)], s.fault ? "  FAULT" : "",
+    std::printf("level %s%s%s%s%s%s\n", LEVEL[static_cast<int>(s.level)], s.fault ? "  FAULT" : "",
                 s.silenced ? "  silenced" : "", s.suppressed ? "  silent by day" : "", s.suspect ? "  sudden drop" : "",
-                s.heat ? "  heat" : "", s.maintenance ? "  MAINTENANCE" : "");
+                s.maintenance ? "  MAINTENANCE" : "");
     if(s.maintenance)
         std::printf("maintenance ends by itself in %lu min\n",
                     static_cast<unsigned long>((s.maintenanceLeftS + 59) / 60));
+    if(s.alertsSuspended)
+        std::printf("ALERT SUSPENDED: its devices and alarm as at Normal for %lu min more\n",
+                    static_cast<unsigned long>((s.alertsSuspendLeftS + 59) / 60));
     std::printf("devices (@relay, E = coil energised):");
     const reefdo::config::Config& cfg = app.GetConfig();
     for(std::size_t i = 0; i < reefdo::DEVICES; ++i)
@@ -150,6 +153,25 @@ int CmdAck(int, char**)
     return 0;
 }
 
+int CmdAlerts(int pArgc, char** pArgv)
+{
+    const bool resume = pArgc == 2 && Is(pArgv[1], "resume");
+    const bool suspend = (pArgc == 2 || pArgc == 3) && Is(pArgv[1], "suspend");
+    const int minutes = pArgc == 3 ? std::atoi(pArgv[2]) : 30;
+    if(!(resume || (suspend && minutes >= 1 && minutes <= 60)))
+    {
+        std::printf("usage: alerts suspend [1..60 min, default 30] | alerts resume\n");
+        return 1;
+    }
+    sampler::Guard guard;
+    const bool ok = sampler::App().SuspendAlerts(resume ? 0u : static_cast<uint32_t>(minutes) * 60u);
+    std::printf("%s\n", ok ? (resume ? "resuming at the next sample"
+                                     : "suspending the current alert at the next sample (a deeper level, a FAULT or "
+                                       "the end of the alert resumes it)")
+                           : (resume ? "no alert is suspended" : "no alert to suspend (Normal or FAULT)"));
+    return ok ? 0 : 1;
+}
+
 int CmdMaint(int pArgc, char** pArgv)
 {
     if(pArgc != 2 || (!Is(pArgv[1], "on") && !Is(pArgv[1], "off")))
@@ -174,7 +196,7 @@ int CmdTest(int pArgc, char** pArgv)
     }
     if(pArgc == 2 && Is(pArgv[1], "json"))
     {
-        const std::size_t n = reefdo::api::TestJson(sampler::App(), sBuf);
+        const std::size_t n = reefdo::gateway::TestJson(sampler::App(), sBuf);
         std::printf("%.*s\n", static_cast<int>(n), sBuf);
         return 0;
     }
@@ -476,7 +498,7 @@ int CmdExport(int pArgc, char** pArgv)
     const uint32_t since = pArgc > 1 ? static_cast<uint32_t>(std::atol(pArgv[1])) : 0;
     StdoutSink sink;
     sampler::Guard guard;
-    const std::size_t n = reefdo::api::ExportCsv(sampler::App(), since, sink);
+    const std::size_t n = reefdo::gateway::ExportCsv(sampler::App(), since, sink);
     std::printf("# %u records\n", static_cast<unsigned>(n));
     return 0;
 }
@@ -486,7 +508,7 @@ int CmdEvents(int pArgc, char** pArgv)
     const uint32_t since = pArgc > 1 ? static_cast<uint32_t>(std::atol(pArgv[1])) : 0;
     StdoutSink sink;
     sampler::Guard guard;
-    const std::size_t n = reefdo::api::EventsCsv(sampler::App(), since, sink);
+    const std::size_t n = reefdo::gateway::EventsCsv(sampler::App(), since, sink);
     std::printf("# %u events\n", static_cast<unsigned>(n));
     return 0;
 }
@@ -551,10 +573,9 @@ int CmdWifi(int pArgc, char** pArgv)
     if(pArgc == 1 || (pArgc == 2 && Is(pArgv[1], "status")))
     {
         const net::Status s = net::GetStatus();
-        std::printf("ssid '%s'  %s  ip %s  rssi %d dBm  setup AP %s  NTP %s  ntfy sent %lu failed %lu\n",
-                    s.ssid.c_str(), s.connected ? "connected" : "not connected", s.ip.c_str(), s.rssi,
-                    s.apActive ? "up" : "down", s.timeSynced ? "synced" : "not yet",
-                    static_cast<unsigned long>(notify::Sent()), static_cast<unsigned long>(notify::Failed()));
+        std::printf("ssid '%s'  %s  ip %s  rssi %d dBm  setup AP %s  NTP %s\n", s.ssid.c_str(),
+                    s.connected ? "connected" : "not connected", s.ip.c_str(), s.rssi, s.apActive ? "up" : "down",
+                    s.timeSynced ? "synced" : "not yet");
         return 0;
     }
     if(pArgc == 2 && Is(pArgv[1], "forget"))
@@ -573,6 +594,37 @@ int CmdWifi(int pArgc, char** pArgv)
     return 1;
 }
 
+int CmdCloud(int pArgc, char** pArgv)
+{
+    if(pArgc == 1)
+    {
+        std::printf("phone app: %s, %lu pushes since boot\n", cloud_link::State(),
+                    static_cast<unsigned long>(cloud_link::Pushes()));
+        return 0;
+    }
+    if(pArgc == 2 && Is(pArgv[1], "link"))
+    {
+        const reefdo::gateway::CloudLink l = cloud_link::StartLink();
+        if(l.ok)
+            std::printf("ESP RainMaker Home: add device %s, code %s (10 min)\n", l.service.c_str(), l.pop.c_str());
+        else
+            std::printf("%s\n", l.message.c_str());
+        return l.ok ? 0 : 1;
+    }
+    if(pArgc == 3 && Is(pArgv[1], "forget") && Is(pArgv[2], "yes"))
+    {
+        if(!cloud_link::Forget())
+        {
+            std::printf("nothing to forget (no fctry partition)\n");
+            return 1;
+        }
+        std::printf("device certificate erased; rebooting — link it again with `cloud link`\n");
+        esp_restart();
+    }
+    std::printf("usage: cloud | cloud link | cloud forget yes  (erases the phone app link: uses up a node ID)\n");
+    return 1;
+}
+
 int CmdPasswd(int pArgc, char** pArgv)
 {
     if(pArgc != 2)
@@ -582,23 +634,6 @@ int CmdPasswd(int pArgc, char** pArgv)
     }
     const bool ok = web::SetPassword(Is(pArgv[1], "reset") ? "" : pArgv[1]);
     std::printf("%s\n", ok ? "web password updated" : "rejected (max 32)");
-    return ok ? 0 : 1;
-}
-
-int CmdNtfy(int pArgc, char** pArgv)
-{
-    if(pArgc != 2 || !Is(pArgv[1], "test"))
-    {
-        std::printf("usage: ntfy test   (uses ntfy.topic from the config)\n");
-        return 1;
-    }
-    reefdo::config::Config cfg;
-    {
-        sampler::Guard guard;
-        cfg = sampler::App().GetConfig();
-    }
-    const bool ok = notify::SendTest(cfg);
-    std::printf("%s\n", ok ? "sent" : "failed (topic set? network up?)");
     return ok ? 0 : 1;
 }
 
@@ -625,6 +660,8 @@ void Start()
     esp_console_register_help_command();
     Add("status", "status [json]", CmdStatus);
     Add("ack", "silence the alarm for ack_silence_s", CmdAck);
+    Add("alerts", "alerts suspend [min] | alerts resume  (the current alert: its devices and alarm as at Normal)",
+        CmdAlerts);
     Add("maint", "maint on|off", CmdMaint);
     Add("test", "test [run|json|clear <device>]  (the devices' self test; clear a failed verdict)", CmdTest);
     Add("cal", "cal air", CmdCal);
@@ -642,7 +679,7 @@ void Start()
     Add("factory", "factory yes", CmdFactory);
     Add("wifi", "wifi [status] | wifi <ssid> [password] | wifi forget", CmdWifi);
     Add("passwd", "passwd <new> | passwd reset", CmdPasswd);
-    Add("ntfy", "ntfy test", CmdNtfy);
+    Add("cloud", "cloud | cloud link | cloud forget yes  (the phone app: state, link window, unlink)", CmdCloud);
 
     ESP_ERROR_CHECK(esp_console_start_repl(repl));
 }

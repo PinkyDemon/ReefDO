@@ -1,0 +1,42 @@
+osal timesync: stop SNTP only if osal_timesync_init() started it. Upstream also stops an SNTP the application
+runs (init adopts it), so every failed esp_rmaker_start() (a board not linked yet) left its clock unsynchronised.
+
+diff --git a/components/osal/timesync/src/time_esp.c b/components/osal/timesync/src/time_esp.c
+index 7c747c3..a18528c 100644
+--- a/components/osal/timesync/src/time_esp.c
++++ b/components/osal/timesync/src/time_esp.c
+@@ -35,6 +35,9 @@ static const char *SNTP_SERVERS[] = {
+ 
+ // Global state
+ static bool init_done = false;
++/* ReefDO patch: whether SNTP was started here. Upstream's deinit stopped it even when the application had started
++ * it (init adopts a running SNTP), so a failed esp_rmaker_start() left the application's clock unsynchronised. */
++static bool started_here = false;
+ 
+ static void osal_timesync_sync_cb(struct timeval *tv)
+ {
+@@ -92,6 +95,7 @@ int osal_timesync_init(osal_timesync_config_t *config)
+     }
+     sntp_init();
+ #endif
++    started_here = true; /* ReefDO patch */
+ 
+     if (config && config->sync_time_cb) {
+         sntp_set_time_sync_notification_cb(config->sync_time_cb);
+@@ -118,11 +122,14 @@ int osal_timesync_deinit(void)
+     if (!init_done) {
+         return 0;
+     }
++    if (started_here) { /* ReefDO patch: an SNTP the application started is not stopped here */
+ #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 1, 0)
+-    esp_sntp_stop();
++        esp_sntp_stop();
+ #else
+-    sntp_stop();
++        sntp_stop();
+ #endif
++    }
++    started_here = false;
+     init_done = false;
+     return 0;
+ }

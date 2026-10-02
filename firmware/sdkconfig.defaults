@@ -42,3 +42,17 @@ CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 # HTTP server: room for the Authorization header and the JSON bodies
 CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
 CONFIG_HTTPD_MAX_URI_LEN=256
+
+# The phone app (cloud_link.cpp, ESP RainMaker Neo): Bluetooth runs only while a board is being linked in the
+# ESP RainMaker Home app; TLS buffers are allocated as needed (no PSRAM on this module)
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_RMNG_CONSOLE_ENABLED=n
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+# The Neo SDK's own minimums (esp_rmaker_neo/src/checks/min_stack_sizes.c)
+CONFIG_FREERTOS_TIMER_TASK_STACK_DEPTH=3072
+# Bluetooth is only ever the link window's provisioning peripheral: one connection, no scanning or central role
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
+CONFIG_BT_CTRL_BLE_MAX_ACT=3

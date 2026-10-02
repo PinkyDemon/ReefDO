@@ -12,12 +12,11 @@ set(REEFDO_CORE_SOURCES
   src/log.cpp
   src/sim.cpp
   src/app.cpp
-  src/api.cpp
   src/tuya.cpp
   src/slot.cpp
 )
 
-# ArduinoJson (third_party, MIT) is the one library the core uses — only from config.cpp / api.cpp.
+# ArduinoJson (third_party, MIT) is the one library the core uses — config.cpp here, views.cpp in the gateway.
 # Disable everything Arduino- or iostream-flavoured; string_view is the interface we want.
 set(REEFDO_JSON_DEFS
   ARDUINOJSON_ENABLE_ARDUINO_STRING=0

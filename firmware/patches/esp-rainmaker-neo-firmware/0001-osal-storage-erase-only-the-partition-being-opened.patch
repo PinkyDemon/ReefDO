@@ -1,0 +1,18 @@
+osal storage: erase only the partition being opened. Upstream erases the default "nvs" whatever the label,
+which wipes the application's settings when e.g. "fctry" cannot be opened.
+
+diff --git a/components/osal/storage/src/nvs_esp_impl.c b/components/osal/storage/src/nvs_esp_impl.c
+index 891dc42..597db1a 100644
+--- a/components/osal/storage/src/nvs_esp_impl.c
++++ b/components/osal/storage/src/nvs_esp_impl.c
+@@ -89,7 +89,9 @@ osal_err_t osal_storage_init(char *partition_label)
+             ( err == ESP_ERR_NVS_NEW_VERSION_FOUND ) ) {
+         /* NVS partition was truncated
+          * and needs to be erased */
+-        err = nvs_flash_erase();
++        /* ReefDO patch: erase only the partition being opened. Upstream erases the default "nvs" here whatever
++         * the label, which would wipe the application's settings when e.g. "fctry" is unreadable. */
++        err = nvs_flash_erase_partition(label);
+         if ( err != ESP_OK ) {
+             return to_nvs_common_error(err);
+         }

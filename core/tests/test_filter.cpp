@@ -64,8 +64,10 @@ TEST_CASE("SlopeEstimator reports 0 until two samples span a minute", "[filter]"
     s.Push(60'000, 4.0f);
     REQUIRE_THAT(s.SlopePer10min(), WithinAbs(-20.0, 1e-3)); // -1 per 30 s = -20 per 10 min
     REQUIRE(s.Count() == 3);
+    REQUIRE(s.SpanMs() == 60'000);
     s.Reset();
     REQUIRE(s.Count() == 0);
+    REQUIRE(s.SpanMs() == 0);
     REQUIRE(s.SlopePer10min() == 0.0f);
 }
 
