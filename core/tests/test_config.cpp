@@ -49,7 +49,10 @@ const char* sExample = R"({
   "test": { "window": ["19:30", "21:00"], "settle_s": 120, "tail_s": 60, "min_headroom_pct": 3.0,
                "inconclusive_days": 5, "chirp": true,
                "induce_deficit_s": 0, "induce_deficit_device": 5 },
-  "boost": { "enabled": true, "window": ["19:30", "20:00"], "target_mgl": 6.5 },
+  "boost": { "enabled": true, "window": ["19:30", "20:00"], "target_mgl": 6.5, "hold_s": 300 },
+  "phone": { "alerts": { "blue": false, "yellow": true, "red": true, "fault": true, "test_fail": true,
+                         "device_lost": true } },
+  "restart": { "daily": true, "time": "04:00" },
   "correction": { "scale": 1.0, "offset": 0.0 },
   "salinity_psu": 35.0,
   "allow_zero_cal": false,
@@ -182,8 +185,12 @@ TEST_CASE("The example document loads into the expected fields", "[config]")
     REQUIRE(c.boost.windowEndMin == 20 * 60);
     REQUIRE(c.boost.devices[0]);
     REQUIRE_FALSE(c.boost.devices[1]);
+    REQUIRE(c.boost.holdS == 300);
+    REQUIRE(c.phone == PhoneAlerts{}); // the example spells out the defaults
+    REQUIRE(c.restart.daily);
+    REQUIRE(c.restart.minute == 4 * 60);
     REQUIRE(c.correction.IsFactory());
-    REQUIRE(c.signals == SignalsConfig{}); // the example spells out the defaults
+    REQUIRE(c.signals == SignalsConfig{});
     REQUIRE(c.signals.of(Level::Normal, false) == c.signals.normal);
     REQUIRE(c.signals.of(Level::Blue, false) == c.signals.blue);
     REQUIRE(c.signals.of(Level::Yellow, false) == c.signals.yellow);
@@ -272,7 +279,15 @@ TEST_CASE("Every wrong-type and bad-value path reports its dotted key", "[config
         {R"({"boost":{"window": [1930, "20:00"]}})", LoadError::WrongType, "boost.window[0]"},
         {R"({"boost":{"enabled": "yes"}})", LoadError::WrongType, "boost.enabled"},
         {R"({"boost":{"target_mgl": "high"}})", LoadError::WrongType, "boost.target_mgl"},
+        {R"({"boost":{"hold_s": "5 min"}})", LoadError::WrongType, "boost.hold_s"},
         {R"({"devices":{"1":{"boost": 1}}})", LoadError::WrongType, "devices.1.boost"},
+        {R"({"phone": "off"})", LoadError::WrongType, "phone"},
+        {R"({"phone":{"alerts": []}})", LoadError::WrongType, "phone.alerts"},
+        {R"({"phone":{"alerts":{"blue": 1}}})", LoadError::WrongType, "phone.alerts.blue"},
+        {R"({"phone":{"alerts":{"device_lost": "no"}}})", LoadError::WrongType, "phone.alerts.device_lost"},
+        {R"({"restart":{"daily": "yes"}})", LoadError::WrongType, "restart.daily"},
+        {R"({"restart":{"time": "4am"}})", LoadError::BadValue, "restart.time"},
+        {R"({"restart":{"time": 400}})", LoadError::WrongType, "restart.time"},
     };
     for(const Case& k : cases)
     {
@@ -314,6 +329,8 @@ TEST_CASE("Every validation rule fires on its own key", "[config]")
         {"recover_sustain_s", [](Config& pC) { pC.ladder.recoverSustainS = 5; }},
         {"night", [](Config& pC) { pC.ladder.nightEndMin = pC.ladder.nightStartMin; }},
         {"fault.consecutive_failures", [](Config& pC) { pC.ladder.faultConsecutiveFailures = 0; }},
+        {"fault.stuck_minutes", [](Config& pC) { pC.stuckMinutes = 4; }}, // 0 would call every reading frozen
+        {"fault.stuck_minutes", [](Config& pC) { pC.stuckMinutes = 1441; }},
         {"fault.level", [](Config& pC) { pC.ladder.faultLevel = Level::Blue; }},
         {"pulse.s", [](Config& pC) { pC.ladder.pulseS = 0; }},
         {"correction.scale", [](Config& pC) { pC.correction.scale = 0.4f; }},
@@ -336,6 +353,7 @@ TEST_CASE("Every validation rule fires on its own key", "[config]")
         {"boost.window", [](Config& pC) { pC.boost.windowStartMin = pC.boost.windowEndMin; }},
         {"boost.target_mgl", [](Config& pC) { pC.boost.targetMgl = 0.5f; }},
         {"boost.target_mgl", [](Config& pC) { pC.boost.targetMgl = 16.0f; }},
+        {"boost.hold_s", [](Config& pC) { pC.boost.holdS = 3601; }},
         {"test.induce_deficit_device",
          [](Config& pC)
          {
@@ -816,6 +834,39 @@ TEST_CASE("night.day_alarm and sudden_drop load and round-trip; the defaults sus
     REQUIRE(Load(Dump(c), back).Ok());
     REQUIRE(back == c);
     REQUIRE(Dump(c).find(R"("day_alarm":"suppress")") != std::string::npos);
+}
+
+TEST_CASE("phone.alerts, restart and boost.hold_s load and round-trip; the defaults wake the phone for Yellow up",
+          "[config]")
+{
+    Config c;
+    REQUIRE_FALSE(c.phone.blue);
+    REQUIRE(c.phone.yellow);
+    REQUIRE(c.phone.red);
+    REQUIRE(c.phone.fault);
+    REQUIRE(c.phone.testFail);
+    REQUIRE(c.phone.deviceLost);
+    REQUIRE_FALSE(c.restart.daily);
+    REQUIRE(c.restart.minute == 4 * 60);
+    REQUIRE(c.boost.holdS == 300);
+    REQUIRE(Load(R"({"phone":{"alerts":{"blue":true,"test_fail":false}},"restart":{"daily":true,"time":"03:30"},)"
+                 R"("boost":{"hold_s":0}})",
+                 c)
+                .Ok());
+    REQUIRE(c.phone.blue);
+    REQUIRE(c.phone.yellow); // untouched
+    REQUIRE_FALSE(c.phone.testFail);
+    REQUIRE(c.restart.daily);
+    REQUIRE(c.restart.minute == 3 * 60 + 30);
+    REQUIRE(c.boost.holdS == 0);
+    const std::string doc = Dump(c);
+    REQUIRE(doc.find(R"("phone":{"alerts":{"blue":true,"yellow":true,"red":true,"fault":true,"test_fail":false,)"
+                     R"("device_lost":true}})") != std::string::npos);
+    REQUIRE(doc.find(R"("restart":{"daily":true,"time":"03:30"})") != std::string::npos);
+    REQUIRE(doc.find(R"("hold_s":0)") != std::string::npos);
+    Config back;
+    REQUIRE(Load(doc, back).Ok());
+    REQUIRE(back == c);
 }
 
 TEST_CASE("test.no_fail_above_mgl loads and round-trips", "[config]")

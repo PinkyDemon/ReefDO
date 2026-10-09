@@ -146,6 +146,7 @@ TEST_CASE("Status line: level, DO and every flag that matters to a person", "[cl
     REQUIRE(StatusLine(s).view() == "Normal · no reading");
     s.doMgl = 6.504f;
     REQUIRE(StatusLine(s).view() == "Normal · 6.50 mg/L");
+    REQUIRE(StatusLine(s, true).view() == "Test alert · Normal · 6.50 mg/L");
     s.level = Level::Yellow;
     s.suspect = true;
     s.alertsSuspended = true;
@@ -193,10 +194,9 @@ TEST_CASE("The status line follows the DO at most once a minute, a state change 
     REQUIRE(statuses >= 1);
     REQUIRE(statuses <= 10); // the DO moves every sample; the line at most once a minute
     b.steps.clear();
-    b.s.app.Ack(); // silenced: a state change
+    b.s.app.SetMaintenance(true, b.s.clock); // a state change: at once
     b.Tick();
-    b.Tick();
-    REQUIRE(b.Count(Param::Status) >= 1);
+    REQUIRE(b.Count(Param::Status) == 1);
 }
 
 TEST_CASE("Series: one median per 5 minutes and series; nothing without a clock or a reading", "[cloud]")
@@ -276,8 +276,9 @@ TEST_CASE("Connecting shows this bucket's median at once, rounded as the app sho
     REQUIRE(std::count_if(v.begin(), v.end(), [](const Update& pU) { return pU.param == Param::Do; }) == 1);
 }
 
-TEST_CASE("Pushes: an alert that needs a person, a FAULT, a failed check, a lost plug — nothing else", "[cloud]")
+TEST_CASE("Pushes: the levels, FAULT, a failed check and a lost plug as configured; a test alert always", "[cloud]")
 {
+    using reefdo::app::NotifyKind;
     Bench b;
     b.Tick();
     auto pushes = [&b](Notification pN)
@@ -288,15 +289,41 @@ TEST_CASE("Pushes: an alert that needs a person, a FAULT, a failed check, a lost
         const Update* st = Find(u, Param::Status);
         return st != nullptr && st->notify && a.Pushes() == 1;
     };
-    Notification yellow{reefdo::app::NotifyKind::Level};
-    yellow.urgent = true;
-    REQUIRE(pushes(yellow));
-    REQUIRE_FALSE(pushes(Notification{reefdo::app::NotifyKind::Level})); // Blue: silent at the tank, silent here
-    REQUIRE(pushes(Notification{reefdo::app::NotifyKind::Fault}));
-    REQUIRE(pushes(Notification{reefdo::app::NotifyKind::TestFail}));
-    REQUIRE(pushes(Notification{reefdo::app::NotifyKind::DeviceLost}));
-    REQUIRE_FALSE(pushes(Notification{reefdo::app::NotifyKind::Recovered}));
-    REQUIRE_FALSE(pushes(Notification{reefdo::app::NotifyKind::Boot}));
+    auto level = [](Level pL, bool pDeeper, bool pRepeat)
+    {
+        Notification n{NotifyKind::Level};
+        n.level = pL;
+        n.deeper = pDeeper;
+        n.repeat = pRepeat;
+        n.urgent = (pDeeper || pRepeat) && pL >= Level::Yellow;
+        return n;
+    };
+    // The defaults: Yellow and Red going deeper or repeating, FAULT, a failed check, a lost plug; Blue stays at the
+    // tank, stepping down and recovering are informational.
+    REQUIRE(pushes(level(Level::Yellow, true, false)));
+    REQUIRE(pushes(level(Level::Red, false, true)));
+    REQUIRE_FALSE(pushes(level(Level::Blue, true, false)));
+    REQUIRE_FALSE(pushes(level(Level::Yellow, false, false))); // Red → Yellow
+    REQUIRE(pushes(Notification{NotifyKind::Fault}));
+    REQUIRE(pushes(Notification{NotifyKind::TestFail}));
+    REQUIRE(pushes(Notification{NotifyKind::DeviceLost}));
+    REQUIRE(pushes(Notification{NotifyKind::TestAlert}));
+    REQUIRE_FALSE(pushes(Notification{NotifyKind::Recovered}));
+    REQUIRE_FALSE(pushes(Notification{NotifyKind::Boot}));
+
+    // Configured the other way round: Blue wakes the phone, nothing else does — but a test alert.
+    reefdo::config::Config c = b.s.app.GetConfig();
+    c.phone = {true, false, false, false, false, false};
+    REQUIRE(b.s.app.SetConfig(c, b.s.clock));
+    REQUIRE(pushes(level(Level::Blue, true, false)));
+    REQUIRE_FALSE(pushes(level(Level::Yellow, true, false)));
+    REQUIRE_FALSE(pushes(level(Level::Red, false, true)));
+    REQUIRE_FALSE(pushes(Notification{NotifyKind::Fault}));
+    REQUIRE_FALSE(pushes(Notification{NotifyKind::TestFail}));
+    REQUIRE_FALSE(pushes(Notification{NotifyKind::DeviceLost}));
+    REQUIRE(pushes(Notification{NotifyKind::TestAlert}));
+    c.phone = {};
+    REQUIRE(b.s.app.SetConfig(c, b.s.clock));
 
     // And a real one: the tank crashes to Red.
     b.s.tank.SetSat(55.0f);
@@ -309,16 +336,43 @@ TEST_CASE("Pushes: an alert that needs a person, a FAULT, a failed check, a lost
     REQUIRE(b.s.app.GetStatus().level == Level::Red);
 }
 
+TEST_CASE("A test alert pushes the status line as 'Test alert · …' once; the line is itself again within a minute",
+          "[cloud]")
+{
+    Bench b;
+    b.Tick();
+    b.s.app.TestAlert(b.s.clock);
+    const Updates u = b.Tick();
+    const Update* st = Find(u, Param::Status);
+    REQUIRE(st != nullptr);
+    REQUIRE(st->notify);
+    REQUIRE(st->text.view().starts_with("Test alert · Normal · "));
+    REQUIRE(b.agent.Pushes() == 1);
+    b.steps.clear();
+    b.RunS(90);
+    const Update* later = nullptr;
+    for(const Updates& step : b.steps)
+        if(const Update* s = Find(step, Param::Status)) later = s;
+    REQUIRE(later != nullptr);
+    REQUIRE(later->text.view().starts_with("Normal · "));
+    REQUIRE_FALSE(later->notify);
+    REQUIRE(b.agent.Pushes() == 1);
+}
+
 TEST_CASE("Writes: Ack and alert suspend through the router, as the cloud; everything else only reports", "[cloud]")
 {
     Bench b;
     b.Tick();
-    // Ack: pressed → acknowledged, the button resets; released → only the reset.
+    // Ack at Normal (a stray tap in the app): refused by the App, nothing logged, the button resets all the same.
+    const std::size_t events = b.s.EventsOf(reefdo::log::Type::Event);
     Updates u = b.Write(Param::Ack, 1);
     REQUIRE(Find(u, Param::Ack) != nullptr);
     REQUIRE_FALSE(Find(u, Param::Ack)->b);
     REQUIRE(b.platform.outputsChanged == 1); // it went through /api/cmd
-    u = b.Write(Param::Ack, 0);
+    b.Tick();
+    REQUIRE(b.s.EventsOf(reefdo::log::Type::Event) == events);
+    REQUIRE_FALSE(b.s.app.GetStatus().silenced);
+    u = b.Write(Param::Ack, 0); // released: only the reset
     REQUIRE(Find(u, Param::Ack) != nullptr);
     REQUIRE(b.platform.outputsChanged == 1);
 
@@ -328,6 +382,9 @@ TEST_CASE("Writes: Ack and alert suspend through the router, as the cloud; every
     b.s.tank.SetSat(55.0f);
     b.RunS(120);
     REQUIRE(b.s.app.GetStatus().level == Level::Red);
+    b.Write(Param::Ack, 1); // in an alert the ack counts
+    b.Tick();
+    REQUIRE(b.s.app.GetStatus().silenced);
     u = b.Write(Param::Suspend, 30);
     REQUIRE(Find(u, Param::Suspend)->i == 30);
     b.Tick();
@@ -386,15 +443,21 @@ TEST_CASE("A sudden drop shows in the status at once", "[cloud]")
     REQUIRE(shown);
 }
 
-TEST_CASE("Back online in a standing alarm, the phone is told once more; not when silenced", "[cloud]")
+TEST_CASE("Back online in a standing alert the phone is woken for, it is told once more; not when silenced", "[cloud]")
 {
-    auto reconnectPushes = [](bool pSilence, bool pSuspend, float pSat)
+    auto reconnectPushes = [](bool pSilence, bool pSuspend, float pSat, bool pBlueToo = false, bool pFault = false,
+                              bool pAutoAck = false)
     {
-        Bench b;
+        reefdo::config::Config c = ExampleConfig();
+        c.phone.blue = pBlueToo;
+        c.phone.fault = !pFault; // pFault: the probe fails, and FAULT is not one of the phone's alerts
+        if(pAutoAck) c.ladder.dayAlarm = reefdo::ladder::DayAlarm::AutoAck; // the bench runs by day
+        Bench b(c);
         b.Tick();
         b.online = false;
         b.s.tank.SetSat(pSat);
-        b.RunS(120);
+        if(pFault) b.s.probe.Model().dropout = true;
+        b.RunS(300); // Blue's dwell is 2 min, the probe lags
         if(pSilence) b.s.app.Ack();
         if(pSuspend) b.s.app.SuspendAlerts(600);
         b.RunS(20);
@@ -406,6 +469,10 @@ TEST_CASE("Back online in a standing alarm, the phone is told once more; not whe
     REQUIRE_FALSE(reconnectPushes(true, false, 55.0f));  // acknowledged at the tank
     REQUIRE_FALSE(reconnectPushes(false, true, 55.0f));  // suspended
     REQUIRE_FALSE(reconnectPushes(false, false, 98.0f)); // nothing wrong
+    REQUIRE_FALSE(reconnectPushes(false, false, 80.0f)); // Blue: not one of the phone's alerts by default...
+    REQUIRE(reconnectPushes(false, false, 80.0f, true)); // ...unless asked for
+    REQUIRE_FALSE(reconnectPushes(false, false, 98.0f, false, true)); // a FAULT the phone is not woken for
+    REQUIRE(reconnectPushes(false, false, 55.0f, false, false, true)); // silenced by the day's own ack: nobody heard
 }
 
 TEST_CASE("A suspend from the app carries the level the app shows, and its minutes are reported again", "[cloud]")
@@ -579,4 +646,35 @@ TEST_CASE("Trend bars sit on a fixed scale from 0.5 mg/L below Red to 2.5 above 
     const std::string bottom =
         Bars(FindRow(empty.agent.Trends(empty.s.app, empty.s.clock, true), Param::Hour)->text.view());
     REQUIRE(bottom == std::string(24, '0'));
+}
+
+TEST_CASE("Trend rows after a time-zone change come back from the log in the new zone", "[cloud]")
+{
+    Bench b;
+    b.RunS(2 * 3600);
+    const TrendUpdates before = b.agent.Trends(b.s.app, b.s.clock, true);
+    REQUIRE(Bars(FindRow(before, Param::Hour)->text.view()).find('.') == std::string::npos);
+    b.s.clock.tzOffsetS += 3600; // the page sent a new zone (DST): every local-time block moves
+    b.RunS(70);
+    const TrendUpdates after = b.agent.Trends(b.s.app, b.s.clock, true);
+    REQUIRE(after.size() == TRENDS);
+    const std::string hour = Bars(FindRow(after, Param::Hour)->text.view());
+    REQUIRE(hour.size() == 24);
+    REQUIRE(std::count(hour.begin(), hour.end(), '.') <= 2); // refilled from the 5-minute log, not blank
+    REQUIRE(std::abs(Low(FindRow(after, Param::Hour)->text.view()) - Low(FindRow(before, Param::Hour)->text.view())) <
+            0.3f);
+}
+
+TEST_CASE("The rows end with the newest sample's block, also when asked in the sample that opened it", "[cloud]")
+{
+    Bench b;
+    b.RunS(2 * 3600);
+    while((*b.s.clock.unixS - TICK_S + TZ) % 150 != 0) // the newest sample is the first of its 2.5 min block
+        b.Tick();
+    Clock same = b.s.clock; // the clock the sample was taken with
+    same.nowMs -= TICK_S * 1000;
+    *same.unixS -= TICK_S;
+    const std::string hour = Bars(FindRow(b.agent.Trends(b.s.app, same, true), Param::Hour)->text.view());
+    REQUIRE(hour.size() == 24);
+    REQUIRE(hour.find('.') == std::string::npos); // the window did not slide past the block just opened
 }

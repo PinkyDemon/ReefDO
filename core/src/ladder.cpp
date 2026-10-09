@@ -50,6 +50,8 @@ void UpdateFault(State& pS, const Input& pIn, const Config& pCfg, Output& pOut)
         return;
     }
     pS.consecutiveFailures += static_cast<uint32_t>(pS.consecutiveFailures != UINT32_MAX); // saturating, branch-free
+    // A real outage: the recovery timer must not count the blind time as time above the exit threshold.
+    if(pS.consecutiveFailures >= pCfg.faultConsecutiveFailures) pS.aboveSinceMs.reset();
     if(pCfg.faultAlert && !pS.fault && pS.consecutiveFailures >= pCfg.faultConsecutiveFailures)
     {
         pS.fault = true;
@@ -244,6 +246,7 @@ Output Step(State& pS, const Input& pIn, const Config& pCfg)
 {
     Output out;
 
+    const bool wasFault = pS.fault;
     UpdateFault(pS, pIn, pCfg, out);
 
     const bool night = IsNight(pIn.minuteOfDay, pCfg);
@@ -255,9 +258,12 @@ Output Step(State& pS, const Input& pIn, const Config& pCfg)
     UpdateSuspension(pS, pIn, prev, out);
     const bool suspended = pS.alertsSuspendedUntilMs.has_value();
 
-    if(pIn.ackPressed)
+    // An ack pressed in the sample the alarm re-armed (deeper, or a FAULT) was meant for the old alarm: dropped.
+    const bool rearmed = pS.level > prev || (pS.fault && !wasFault);
+    if(pIn.ackPressed && !rearmed)
     {
         pS.ackUntilMs = pIn.nowMs + Ms(pCfg.ackSilenceS);
+        pS.ackByHand = true;
         out.events.push_back({EventType::Ack});
     }
     bool silenced = pS.ackUntilMs.has_value() && pIn.nowMs < *pS.ackUntilMs;
@@ -275,6 +281,7 @@ Output Step(State& pS, const Input& pIn, const Config& pCfg)
     else if(pIn.nowMs - *pS.soundingSinceMs >= Ms(DAY_ACK_AFTER_S))
     {
         pS.ackUntilMs = pIn.nowMs + Ms(pCfg.ackSilenceS);
+        pS.ackByHand = false;
         pS.soundingSinceMs.reset();
         silenced = true;
         out.events.push_back({EventType::AutoAck});
@@ -286,6 +293,7 @@ Output Step(State& pS, const Input& pIn, const Config& pCfg)
     out.level = pS.level;
     out.fault = pS.fault;
     out.silenced = silenced;
+    out.autoAcked = silenced && !pS.ackByHand;
     out.suppressed = suppressed;
     out.suspect = pS.suspect;
     out.alertsSuspended = suspended;

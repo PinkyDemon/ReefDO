@@ -108,7 +108,6 @@ void App::Start(const Clock& pClock, uint32_t pBootReason)
     mLogE.Open();
     mLogD.Open();
     mNextSeq = Max3(LastSeq(mLogA), LastSeq(mLogE), LastSeq(mLogD)) + 1;
-    mStarted = true;
     LogSimple(pClock, log::Type::Boot, pBootReason, 0.0f, 0.0f);
     LogSimple(pClock, log::Type::Correction, 0, mCfg.correction.scale, mCfg.correction.offset);
     LogSimple(pClock, log::Type::Config, mCfg.schema, 0.0f, 0.0f);
@@ -179,6 +178,7 @@ void App::LogLadderEvents(const Clock& pClock, const ladder::Output& pOut, float
                 else if(e.to > e.from)
                 {
                     n.level = e.to;
+                    n.deeper = true;
                     n.urgent = e.to >= Level::Yellow;
                     mLastAlertNotifyMs = pClock.nowMs;
                 }
@@ -253,10 +253,12 @@ void App::LogTestEvents(const Clock& pClock, const selftest::Output& pOut)
     }
 }
 
+// A standing alarm repeats its push until someone acknowledges it; the day's automatic ack is not someone.
 void App::AlertRepeat(const Clock& pClock)
 {
     const bool alarm = mStatus.fault || mStatus.level >= Level::Yellow;
-    if(!alarm || mStatus.silenced || mStatus.maintenance || mStatus.alertsSuspended) return;
+    const bool heard = mStatus.silenced && !mStatus.autoAcked;
+    if(!alarm || heard || mStatus.maintenance || mStatus.alertsSuspended) return;
     const bool loud = mStatus.fault || mStatus.level == Level::Red; // FAULT repeats like Red
     if(pClock.nowMs - mLastAlertNotifyMs < (loud ? RED_REPEAT_MS : YELLOW_REPEAT_MS)) return;
     mLastAlertNotifyMs = pClock.nowMs;
@@ -283,7 +285,8 @@ void App::Aggregate(const Clock& pClock, const probe::Reading& pR, float pDoC, L
 void App::DailyRollover(const Clock& pClock, const std::optional<selftest::LocalTime>& pLt)
 {
     if(!pLt.has_value()) return;
-    if(mDailyDay.has_value() && pLt->dayIndex != *mDailyDay && mDaily.samples > 0)
+    const bool newDay = mDailyDay.has_value() && pLt->dayIndex != *mDailyDay;
+    if(newDay && mDaily.samples > 0) // a day without a reading leaves no record, and nothing for the next one
     {
         log::Record r;
         r.ts = pClock.unixS.value_or(0);
@@ -299,8 +302,8 @@ void App::DailyRollover(const Clock& pClock, const std::optional<selftest::Local
         r.seq = mNextSeq++;
         mLogA.Append(r);
         mLogD.Append(r);
-        mDaily = Daily{};
     }
+    if(newDay) mDaily = Daily{};
     mDailyDay = pLt->dayIndex;
 }
 
@@ -336,6 +339,12 @@ void App::Tick(const Clock& pClock)
         mStatus.consecutiveFailures = 0;
     else
         ++mStatus.consecutiveFailures;
+    if(!pr.reading.has_value()) mStatus.tempC.reset();
+    if(mStatus.consecutiveFailures >= mCfg.ladder.faultConsecutiveFailures)
+    {
+        mMedDo.Reset(); // an outage: the first readings after it must not be outvoted by the ones before it
+        mMedSat.Reset();
+    }
     mStatus.doMgl = doMed;
     mStatus.satPct = satMed;
     mStatus.slopeMglPer10min = mSlopeDo.SlopePer10min();
@@ -359,6 +368,7 @@ void App::Tick(const Clock& pClock)
     mStatus.level = lo.level;
     mStatus.fault = lo.fault;
     mStatus.silenced = lo.silenced;
+    mStatus.autoAcked = lo.autoAcked;
     mStatus.suppressed = lo.suppressed;
     mStatus.suspect = lo.suspect;
     mStatus.alertsSuspended = lo.alertsSuspended;
@@ -389,6 +399,7 @@ void App::Tick(const Clock& pClock)
 
     // 3b. Boost: yields to a test run and to maintenance
     boost::Input bi;
+    bi.nowMs = pClock.nowMs;
     bi.local = lt;
     bi.doMgl = li.doMgl; // a stuck reading is no reading here either
     bi.testRunning = so.running;
@@ -410,8 +421,9 @@ void App::Tick(const Clock& pClock)
         if(mManual[i].has_value() && testStarts) EndManual(i, pClock, 2);
         if(mManual[i].has_value() && (why != mAutoWhy[i] || levelChanged)) EndManual(i, pClock, 1);
         mAutoWhy[i] = why;
-        Resolve(i, pClock);
+        ResolveDevice(i, pClock);
     }
+    UpdateRelays();
 
     // 5. Log
     const float doNow = doMed.value_or(0.0f);
@@ -452,17 +464,60 @@ void App::Tick(const Clock& pClock)
     AlertRepeat(pClock);
 
     // Correction parameters go into the log once a day, just before the test window opens.
-    if(lt.has_value() && lt->minuteOfDay + 1 == mCfg.test.windowStartMin && mCorrectionLoggedDay != lt->dayIndex)
+    if(lt.has_value() && (lt->minuteOfDay + 1) % 1440 == mCfg.test.windowStartMin &&
+       mCorrectionLoggedDay != lt->dayIndex)
     {
         mCorrectionLoggedDay = lt->dayIndex;
         LogSimple(pClock, log::Type::Correction, 1, mCfg.correction.scale, mCfg.correction.offset);
     }
+
+    // The daily restart: the first quiet sample within the hour after its time, once per day, and never in the
+    // first hours after a boot (a restart that came up in its own window must not restart again).
+    mStatus.restartDue = false;
+    if(mCfg.restart.daily && lt.has_value() && mStatus.uptimeS >= RESTART_MIN_UPTIME_S && mRestartDay != lt->dayIndex &&
+       (lt->minuteOfDay + 1440 - mCfg.restart.minute) % 1440 < RESTART_WINDOW_MIN && RestartAllowed())
+    {
+        mRestartDay = lt->dayIndex;
+        mStatus.restartDue = true;
+    }
     mStatus.nextSeq = mNextSeq;
 }
 
-void App::Ack()
+bool App::Ack()
 {
+    if(mStatus.level == Level::Normal && !mStatus.fault) return false; // nothing to acknowledge
     mAckPending = true;
+    return true;
+}
+
+void App::TestAlert(const Clock& pClock)
+{
+    LogSimple(pClock, log::Type::Command, 12u, 0.0f, 0.0f);
+    Notify(Notification{NotifyKind::TestAlert});
+}
+
+void App::LogSystem(const Clock& pClock, SystemEvent pEvent, float pF0, float pF1, float pF2, float pF3)
+{
+    log::Record r;
+    r.ts = pClock.unixS.value_or(0);
+    r.uptimeS = UptimeS(pClock);
+    r.type = log::Type::System;
+    r.level = static_cast<uint8_t>(mStatus.level);
+    r.aux = static_cast<uint32_t>(pEvent);
+    r.f0 = pF0;
+    r.f1 = pF1;
+    r.f2 = pF2;
+    r.f3 = pF3;
+    Write(r, pEvent != SystemEvent::Heap); // an hourly heap line is for the export, not the events page
+}
+
+bool App::RestartAllowed() const
+{
+    bool quiet = mStatus.level == Level::Normal && !mStatus.fault && !mStatus.testRunning && !mStatus.boostRunning &&
+                 !mStatus.maintenance;
+    for(std::size_t i = 0; i < DEVICES; ++i)
+        quiet = quiet && !mSuspendUntilMs[i].has_value() && !mManual[i].has_value();
+    return quiet;
 }
 
 bool App::SuspendAlerts(uint32_t pSeconds, std::optional<ladder::Level> pSeen)
@@ -576,7 +631,7 @@ bool App::AnySuspended() const
     return false;
 }
 
-void App::Resolve(std::size_t pI, const Clock& pClock)
+void App::ResolveDevice(std::size_t pI, const Clock& pClock)
 {
     Expire(pI, pClock);
     uint8_t why = mAutoWhy[pI];
@@ -587,6 +642,11 @@ void App::Resolve(std::size_t pI, const Clock& pClock)
     mStatus.suspendLeftS[pI] = LeftS(mSuspendUntilMs[pI], pClock.nowMs);
     mStatus.manual[pI] = mManual[pI];
     mStatus.deviceOn[pI] = on;
+}
+
+void App::Resolve(std::size_t pI, const Clock& pClock)
+{
+    ResolveDevice(pI, pClock);
     UpdateRelays(); // a plug is switched by the Tuya task from deviceOn
 }
 

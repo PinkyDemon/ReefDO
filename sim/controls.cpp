@@ -214,12 +214,15 @@ std::string Execute(World& pW, const std::string& pLine)
     {
         using reefdo::gateway::cloud::Param;
         if(w[1] == "ack" && w.size() == 2) return pW.cloudWrite(static_cast<int>(Param::Ack), 1);
-        if(w[1] == "suspend" && w.size() == 3 && Number(w[2], a))
+        if(w[1] == "suspend" && w.size() == 3 && Number(w[2], a) && a >= 0.0 && a <= 60.0) // the slider's range
             return pW.cloudWrite(static_cast<int>(Param::Suspend), static_cast<int>(a));
     }
-    if(c == "cloud" && w.size() == 2 && (w[1] == "up" || w[1] == "down"))
+    if(c == "cloud" && w.size() == 2 && (w[1] == "up" || w[1] == "down") && pW.cloudUp != (w[1] == "up"))
     {
         pW.cloudUp = w[1] == "up";
+        pW.app.LogSystem(pW.clock, pW.cloudUp ? reefdo::app::SystemEvent::CloudUp : reefdo::app::SystemEvent::CloudDown,
+                         static_cast<float>((pW.clock.nowMs - pW.cloudSinceMs) / 1000u)); // as the board logs it
+        pW.cloudSinceMs = pW.clock.nowMs;
         return pW.cloudUp ? "cloud link up\n" : "cloud link down\n";
     }
     return "unknown or incomplete command; try help\n";

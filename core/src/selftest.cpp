@@ -48,7 +48,7 @@ bool TestedOut(const Input& pIn, const Config& pCfg)
     return false;
 }
 
-// The current sample was pushed first (Step), so the window ends now: a trend from before a probe gap is not ready.
+// The current sample was pushed first (Step), so the window ends now; without one (a probe gap) nothing is ready.
 bool TrendReady(const State& pS, const Input& pIn)
 {
     return pIn.satPct.has_value() && pS.slope.SpanMs() >= TREND_MS;
@@ -67,11 +67,14 @@ void Emit(Output& pOut, Event pE)
 // Scheduled start decision. May emit Skipped(Missed) once per day.
 bool ScheduledDue(State& pS, const Input& pIn, const Config& pCfg, Output& pOut)
 {
+    if(TestedCount(pCfg) == 0) return false; // nothing configured: nothing to schedule, or to log about
     if(!pIn.local.has_value())
     {
-        // Clock unknown: 24 h (monotonic) after the previous run lands in the same window if that one was scheduled.
+        // Clock unknown: 24 h (monotonic) after the previous run or attempt; the attempt counts whether it runs or
+        // is skipped, as a day does with a clock.
         if(pS.lastRunMs.has_value() && pIn.nowMs - *pS.lastRunMs >= DAY_MS && TrendReady(pS, pIn))
         {
+            pS.lastRunMs = pIn.nowMs;
             pS.clockUnknown = true;
             return true;
         }

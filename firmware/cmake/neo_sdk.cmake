@@ -5,8 +5,11 @@
 # esp-aws-iot libraries (git) next to it. A pin or patch change downloads it again; deleting firmware/external
 # does too.
 #   Source: https://github.com/espressif/esp-rainmaker-neo-firmware (Apache-2.0)
-set(REEFDO_NEO_SDK_COMMIT "ff4a7946e5aea67386ebfc85a60303cec7210010") # 0.8.0, 2026-09-09
-set(REEFDO_NEO_SDK_SHA256 "1076c22aac587126f7b903c8a5dd7d2655f4a3970c80242dad65f4e181fe60ce")
+# 0.8.0 plus the fixes of 2026-10-06/07 on ReefDO's path: a double free on a publish failing during a reconnect, a
+# time-series entry leaking on a failed publish, a lost subscription (the phone's writes) after a failed resubscribe,
+# a FreeRTOS timer used after its delete in the backoff.
+set(REEFDO_NEO_SDK_COMMIT "6249bb49fe4e34f24f8deada1a138f8bf5eff55c") # 2026-10-07
+set(REEFDO_NEO_SDK_SHA256 "4d42e310c13a48e7073db5bb4f5ec5f1749e8b7a2b680117c8e4ed34dbfcf54c")
 set(REEFDO_NEO_SDK_URL
     "https://github.com/espressif/esp-rainmaker-neo-firmware/archive/${REEFDO_NEO_SDK_COMMIT}.tar.gz")
 get_filename_component(_neo_external "${CMAKE_CURRENT_LIST_DIR}/../external" ABSOLUTE)

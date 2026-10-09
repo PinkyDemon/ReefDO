@@ -19,7 +19,7 @@ public:
     {
         const bool fits = pS.size() <= N;
         mLen = fits ? pS.size() : N;
-        std::memcpy(mData, pS.data(), mLen);
+        if(mLen != 0) std::memcpy(mData, pS.data(), mLen); // an empty view may carry no pointer at all
         mData[mLen] = '\0';
         return fits;
     }

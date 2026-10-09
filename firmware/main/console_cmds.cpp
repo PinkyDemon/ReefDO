@@ -1,5 +1,6 @@
 #include "console_cmds.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -11,9 +12,7 @@
 #include "cloud_link.hpp"
 #include "esp_app_desc.h"
 #include "esp_console.h"
-#include "esp_heap_caps.h"
 #include "esp_system.h"
-#include "esp_timer.h"
 #include "hal/nvs_store.hpp"
 #include "indicator.hpp"
 #include "net.hpp"
@@ -66,13 +65,41 @@ std::string_view JoinJson(int pArgc, char** pArgv, int pFrom, char* pBuf, std::s
     return {pBuf, n};
 }
 
+// CSV to the console. The USB console blocks while the host drains it, so each buffer leaves with the App
+// unlocked: a long export must not hold the sampler (and its watchdog) up. Flush() once the stream is done.
 class StdoutSink : public reefdo::gateway::ISink
 {
 public:
+    explicit StdoutSink(sampler::Guard& pGuard)
+        : mGuard(pGuard)
+    {
+    }
     bool Write(std::string_view pChunk) override
     {
-        return std::fwrite(pChunk.data(), 1, pChunk.size(), stdout) == pChunk.size();
+        while(!pChunk.empty())
+        {
+            if(mLen == sizeof mBuf && !Flush()) return false;
+            const std::size_t n = std::min(pChunk.size(), sizeof mBuf - mLen);
+            std::memcpy(mBuf + mLen, pChunk.data(), n);
+            mLen += n;
+            pChunk.remove_prefix(n);
+        }
+        return true;
     }
+    bool Flush()
+    {
+        if(mLen == 0) return true;
+        mGuard.Unlock();
+        const bool ok = std::fwrite(mBuf, 1, mLen, stdout) == mLen;
+        mGuard.Lock();
+        mLen = 0;
+        return ok;
+    }
+
+private:
+    sampler::Guard& mGuard;
+    char mBuf[1400];
+    std::size_t mLen = 0;
 };
 
 int CmdStatus(int pArgc, char** pArgv)
@@ -148,9 +175,9 @@ int CmdStatus(int pArgc, char** pArgv)
 int CmdAck(int, char**)
 {
     sampler::Guard guard;
-    sampler::App().Ack();
-    std::printf("acknowledged\n");
-    return 0;
+    const bool ok = sampler::App().Ack();
+    std::printf("%s\n", ok ? "acknowledged" : "nothing to acknowledge");
+    return ok ? 0 : 1;
 }
 
 int CmdAlerts(int pArgc, char** pArgv)
@@ -439,9 +466,10 @@ int CmdProbe(int pArgc, char** pArgv)
         std::printf("usage: probe sim|rk500   (takes effect after reboot)\n");
         return 1;
     }
-    sampler::SetProbeSource(Is(pArgv[1], "sim") ? sampler::ProbeSource::Sim : sampler::ProbeSource::Rk500);
-    std::printf("probe source %s saved; reboot to apply\n", pArgv[1]);
-    return 0;
+    const bool ok =
+        sampler::SetProbeSource(Is(pArgv[1], "sim") ? sampler::ProbeSource::Sim : sampler::ProbeSource::Rk500);
+    std::printf(ok ? "probe source %s saved; reboot to apply\n" : "probe source %s NOT saved: NVS refused\n", pArgv[1]);
+    return ok ? 0 : 1;
 }
 
 int CmdDebug(int pArgc, char** pArgv)
@@ -496,9 +524,10 @@ int CmdDebug(int pArgc, char** pArgv)
 int CmdExport(int pArgc, char** pArgv)
 {
     const uint32_t since = pArgc > 1 ? static_cast<uint32_t>(std::atol(pArgv[1])) : 0;
-    StdoutSink sink;
     sampler::Guard guard;
+    StdoutSink sink(guard);
     const std::size_t n = reefdo::gateway::ExportCsv(sampler::App(), since, sink);
+    sink.Flush();
     std::printf("# %u records\n", static_cast<unsigned>(n));
     return 0;
 }
@@ -506,9 +535,10 @@ int CmdExport(int pArgc, char** pArgv)
 int CmdEvents(int pArgc, char** pArgv)
 {
     const uint32_t since = pArgc > 1 ? static_cast<uint32_t>(std::atol(pArgv[1])) : 0;
-    StdoutSink sink;
     sampler::Guard guard;
+    StdoutSink sink(guard);
     const std::size_t n = reefdo::gateway::EventsCsv(sampler::App(), since, sink);
+    sink.Flush();
     std::printf("# %u events\n", static_cast<unsigned>(n));
     return 0;
 }
@@ -551,8 +581,7 @@ int CmdBuzzer(int pArgc, char** pArgv)
 int CmdReboot(int, char**)
 {
     std::printf("rebooting\n");
-    std::fflush(stdout);
-    esp_restart();
+    sampler::Restart(reefdo::app::RestartWhy::Command);
     return 0;
 }
 
@@ -564,7 +593,7 @@ int CmdFactory(int pArgc, char** pArgv)
         return 1;
     }
     hal::nvs::EraseAll();
-    esp_restart();
+    sampler::Restart(reefdo::app::RestartWhy::Command);
     return 0;
 }
 
@@ -611,6 +640,18 @@ int CmdCloud(int pArgc, char** pArgv)
             std::printf("%s\n", l.message.c_str());
         return l.ok ? 0 : 1;
     }
+    if(pArgc == 2 && Is(pArgv[1], "test"))
+    {
+        if(!Is(cloud_link::State(), "online"))
+        {
+            std::printf("the phone app is not online (%s)\n", cloud_link::State());
+            return 1;
+        }
+        sampler::Guard guard;
+        sampler::App().TestAlert(sampler::ClockNow());
+        std::printf("test alert: the phone should buzz within a sample period\n");
+        return 0;
+    }
     if(pArgc == 3 && Is(pArgv[1], "forget") && Is(pArgv[2], "yes"))
     {
         if(!cloud_link::Forget())
@@ -619,9 +660,10 @@ int CmdCloud(int pArgc, char** pArgv)
             return 1;
         }
         std::printf("device certificate erased; rebooting — link it again with `cloud link`\n");
-        esp_restart();
+        sampler::Restart(reefdo::app::RestartWhy::Command);
     }
-    std::printf("usage: cloud | cloud link | cloud forget yes  (erases the phone app link: uses up a node ID)\n");
+    std::printf("usage: cloud | cloud link | cloud test | cloud forget yes  (erases the phone app link: uses up a node "
+                "ID)\n");
     return 1;
 }
 
@@ -679,7 +721,10 @@ void Start()
     Add("factory", "factory yes", CmdFactory);
     Add("wifi", "wifi [status] | wifi <ssid> [password] | wifi forget", CmdWifi);
     Add("passwd", "passwd <new> | passwd reset", CmdPasswd);
-    Add("cloud", "cloud | cloud link | cloud forget yes  (the phone app: state, link window, unlink)", CmdCloud);
+    Add("cloud",
+        "cloud | cloud link | cloud test | cloud forget yes  (the phone app: state, link window, a test "
+        "alert, unlink)",
+        CmdCloud);
 
     ESP_ERROR_CHECK(esp_console_start_repl(repl));
 }

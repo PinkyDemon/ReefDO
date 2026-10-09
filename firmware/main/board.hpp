@@ -20,7 +20,6 @@ constexpr gpio_num_t RS485_RX_PIN = GPIO_NUM_18;
 // Must be the first thing app_main does: every coil de-energised before anything else can run.
 void InitRelaysDeenergised();
 void SetRelay(int pIndex, bool energised); // pIndex 0..5
-bool RelayEnergised(int pIndex);
 
 void InitBuzzer();
 void BuzzerSet(bool pOn, uint32_t pHz, uint32_t pVolume = 3); // non-blocking; pVolume 0..3

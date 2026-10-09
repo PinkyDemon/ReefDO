@@ -30,5 +30,6 @@ bool RememberCredentials(std::string_view pSsid, std::string_view pPassword);
 // a network with credentials the app sent (already remembered); otherwise ReefDO's own are restored.
 void PauseStation();
 void ResumeStation(bool pJoined);
+uint32_t StackLeft(); // the net task's smallest stack margin so far, bytes
 
 } // namespace net

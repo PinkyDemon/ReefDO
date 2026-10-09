@@ -46,6 +46,8 @@ Facts an agent needs to work in this repository. The README covers usage; this c
   `firmware/cmake/neo_sdk.cmake` fetches it into `firmware/external/` (pinned commit and SHA-256) and applies
   `firmware/patches/esp-rainmaker-neo-firmware/*.patch` (each change marked "ReefDO patch" in the source); the SDK
   then clones its esp-aws-iot libraries itself. Updating it: a new commit and hash there, patches that still apply.
+  The SDK's `espressif/json_generator` is pinned to `~1.2.0` in `main/idf_component.yml`: 2.0 escapes strings and
+  changes `json_gen_str_end`'s return, which the SDK at this commit does not expect (its claiming escapes by hand).
 - `firmware/components/reefdo_core` and `reefdo_gateway` compile `core/` and `gateway/` as IDF components from
   their `sources.cmake`.
 - The web page is a single file, `firmware/main/www/index.html`, embedded at build time; vanilla JS, no CDN.
@@ -81,9 +83,30 @@ Facts an agent needs to work in this repository. The README covers usage; this c
   deeper than the one the asker saw (`suspend_alerts.level`: the page and the phone send what they show); it ends by itself at a deeper level, a FAULT, back at Normal or when its time runs out (`ResumeReason`, logged
   as AlertSuspend / AlertResume, `FLAG_ALERTS_SUSPENDED`); no repeat pushes meanwhile. Windows, the test, the
   boost and manual switches are not alert-driven and do not depend on it.
+- `App::Ack()` is a no-op (false) at Normal without a FAULT: the phone app's Acknowledge control fires on a stray
+  tap, and a logged Ack with nothing to acknowledge is noise. The router answers "nothing to acknowledge". The
+  ladder drops an ack that lands in the sample the alarm re-armed (deeper, or a FAULT entering). The day's
+  `auto_ack` sets `Output::autoAcked`: silenced, but nobody has heard it — `App::AlertRepeat` and the cloud's
+  reconnect push go on until a person acknowledges.
+- After a probe outage (`fault.consecutive_failures` misses) the ladder's recovery timer and the App's median
+  filters start over: the first readings after the gap are judged on their own, never outvoted by the ones before.
+- The web server (`web.cpp`) runs within lwIP's socket budget (`CONFIG_LWIP_MAX_SOCKETS` 16: 3 of its own, 6
+  clients, MQTT, a plug, the self-check) with keep-alive probes on; a refused upload returns `ESP_FAIL` so the
+  socket closes instead of draining the body. `web::Busy()` tells the self-check a slow request from a dead server.
+- The phone's pushes are config: `config.phone` (`PhoneAlerts`) says which levels (entered or repeating), FAULT,
+  a failed check and a lost plug wake it (`gateway::cloud::Pushed`); a `NotifyKind::TestAlert` (`App::TestAlert`,
+  `{"test_alert":true}`, `cloud test`) always does and prefixes the status line. The router sends it only while
+  `IPlatform::Sys().cloud` is "online".
+- `log::Type::System` records (`app::SystemEvent`, `App::LogSystem`) are the firmware's health reports: the
+  board queues them from any task (`sampler::ReportSystem`) and the sampler writes them under its lock; the hourly
+  Heap line goes to tier A only. Every restart goes through `sampler::Restart(RestartWhy)`, which logs first.
+  `App::RestartAllowed()` (Normal, no FAULT, test, boost, maintenance, device out of order or manual switch) gates
+  both the daily restart (`config.restart`, `Status::restartDue`, in `App::Tick`) and the firmware's own web
+  self-check restart (`net.cpp`, five failed loopback GETs of /api/sys in a row).
 - Device demand is the OR of the ladder, the self test (`selftest.cpp`, called "service" up to 1.0), the
   boost (`boost.cpp`), the always-on windows and the manual switch (`app::Demand`, reported as
-  `Status::deviceWhy`); the boost yields to a test run and maintenance and runs at most once per local day; an
+  `Status::deviceWhy`); the boost yields to a test run and maintenance, runs at most once per local day, stops
+  only once DO has held its target for `boost.hold_s` and rides a missed reading out; an
   exclusive test (`test.exclusive`) holds the windows off and ends manual switches, and only an exclusive run
   measures or judges. A manual on/off (`App::SetManual`) overrides the demands until the device's demands or
   the level or FAULT change, or an exclusive test starts; then it is automatic again.
@@ -106,7 +129,9 @@ Facts an agent needs to work in this repository. The README covers usage; this c
 - A self-test miss that started at or above `test.no_fail_above_mgl` (DO at the device's start) is Unchecked,
   not Fail; the DeviceEnd record carries flag 8, the DO in f1 and the limit in f2.
 - The log rings assume raw NOR flash: a torn record seals its segment, a partial tail is dropped on open,
-  segments are erased right before reuse. Tests model this in `core/tests/fake_store.hpp`.
+  segments are erased right before reuse. Tests model this in `core/tests/fake_store.hpp`. The CSV streams
+  (`gateway/src/views.cpp`) find their start by binary search (clock-less records skipped) and re-anchor on the
+  seq / time just written when the ring dropped a segment under them: the sink may let the sampler in.
 
 ## Style
 

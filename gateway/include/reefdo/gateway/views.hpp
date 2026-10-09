@@ -35,13 +35,14 @@ std::size_t ResultJson(const config::LoadResult& pR, std::span<char> pOut);
 // · {"test":"run"} · {"cal":"air"}
 // · {"suspend":{"device":n,"s":n}} · {"manual":{"device":n,"on":b|null}} · {"clear":{"device":n}} (a failed test
 // verdict; n = the device number, 1..DEVICES)
-// · {"time":{"unix":s,"tz":s}}
+// · {"time":{"unix":s,"tz":s}} · {"test_alert":true} (a push to the phone app, for its own sake)
 struct Command
 {
     bool ok = false;
-    const char* message = "";
+    const char* message = "";        // a literal without quote or backslash: the router puts it into JSON as it is
     std::optional<uint32_t> setUnix; // the firmware applies these to the system clock
     std::optional<int32_t> setTz;
+    bool testAlert = false; // the router sends it once it knows the phone app is online (App::TestAlert)
 };
 Command ApplyCommand(app::App& pApp, std::string_view pJson, const app::Clock& pClock);
 

@@ -1,6 +1,7 @@
 #include "http_server.hpp"
 
 #include <cctype>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 
@@ -156,6 +157,10 @@ void HttpServer::Serve(uintptr_t pClient, const std::function<HttpReply(const Ht
     const timeval timeout{3, 0};
 #endif
     setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout), sizeof timeout);
+    setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&timeout), sizeof timeout);
+    // The server is the simulation's main loop: a client trickling bytes or not reading its answer must not hold
+    // the tank up for longer than this.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
 
     std::string in;
     std::size_t headEnd = std::string::npos;
@@ -163,7 +168,7 @@ void HttpServer::Serve(uintptr_t pClient, const std::function<HttpReply(const Ht
     while(headEnd == std::string::npos)
     {
         const int n = recv(c, buf, sizeof buf, 0);
-        if(n <= 0) return;
+        if(n <= 0 || std::chrono::steady_clock::now() > deadline) return;
         in.append(buf, static_cast<std::size_t>(n));
         headEnd = in.find("\r\n\r\n");
         if(headEnd == std::string::npos && in.size() > HEAD_MAX) return;
@@ -207,7 +212,7 @@ void HttpServer::Serve(uintptr_t pClient, const std::function<HttpReply(const Ht
     while(req.body.size() < length)
     {
         const int n = recv(c, buf, sizeof buf, 0);
-        if(n <= 0) return;
+        if(n <= 0 || std::chrono::steady_clock::now() > deadline) return;
         req.body.append(buf, static_cast<std::size_t>(n));
     }
     req.body.resize(length);

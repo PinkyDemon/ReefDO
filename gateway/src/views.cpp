@@ -72,18 +72,69 @@ std::optional<uint32_t> Seconds(JsonVariantConst pO, Command& pCmd)
     return pO["s"].as<uint32_t>();
 }
 
-// First tier-A index whose record lies at or after `from_ts`, scanning back from the newest (a chart asks for
-// the last day, not the first). Records without a clock (ts 0) are skipped over.
+// First tier-A index whose record lies at or after pFromTs. Timestamps grow along the ring except for the clock-less
+// records (ts 0) a boot without a clock leaves behind: a binary search in which the next timed record speaks for
+// them (the caller's ts filter drops them anyway). Every probe is a flash read: the ring may hold 100k records.
 std::size_t FirstAtOrAfter(const log::RecordLog& pL, uint32_t pFromTs)
 {
-    std::size_t i = pL.Count();
-    while(i > 0)
+    if(pFromTs == 0) return 0;
+    std::size_t lo = 0;
+    std::size_t hi = pL.Count(); // the answer lies in [lo, hi]
+    while(lo < hi)
     {
-        const std::optional<log::Record> r = pL.At(i - 1);
-        if(r.has_value() && r->ts != 0 && r->ts < pFromTs) break;
-        --i;
+        const std::size_t mid = lo + (hi - lo) / 2;
+        std::size_t probe = mid;
+        std::optional<log::Record> r = pL.At(probe);
+        while(probe + 1 < hi && (!r.has_value() || r->ts == 0))
+            r = pL.At(++probe);
+        if(r.has_value() && r->ts != 0 && r->ts < pFromTs)
+            lo = probe + 1;
+        else
+            hi = mid;
     }
-    return i;
+    return lo;
+}
+
+// First tier-B index whose bucket starts at or after pFromTs: every aggregate carries a time, and they grow.
+std::size_t FirstAggregateAtOrAfter(const log::AggregateLog& pL, uint32_t pFromTs)
+{
+    std::size_t lo = 0;
+    std::size_t hi = pL.Count();
+    while(lo < hi)
+    {
+        const std::size_t mid = lo + (hi - lo) / 2;
+        const std::optional<log::Aggregate> a = pL.At(mid);
+        if(a.has_value() && a->ts < pFromTs)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo;
+}
+
+// Every record with seq >= pSinceSeq, as CSV. The sink may let the sampler in meanwhile (the board sends with the
+// App unlocked), and a full ring that takes a record then drops its oldest segment, moving every index: the stream
+// re-anchors on the seq it has just written instead of skipping a segment's worth of rows.
+std::size_t RecordsCsv(const log::RecordLog& pL, uint32_t pSinceSeq, ISink& pSink)
+{
+    char buf[160];
+    if(!Emit(pSink, buf, log::CsvHeader(buf))) return 0;
+    std::size_t n = 0;
+    std::size_t i = pL.LowerBound(pSinceSeq);
+    while(i < pL.Count())
+    {
+        const std::optional<log::Record> r = pL.At(i);
+        if(!r.has_value())
+        {
+            ++i;
+            continue;
+        }
+        const std::size_t before = pL.Count();
+        if(!Emit(pSink, buf, log::CsvLine(*r, buf))) break;
+        ++n;
+        i = pL.Count() < before ? pL.LowerBound(r->seq + 1) : i + 1;
+    }
+    return n;
 }
 
 } // namespace
@@ -276,9 +327,15 @@ Command ApplyCommand(app::App& pApp, std::string_view pJson, const app::Clock& p
     }
     if(root["ack"].is<bool>() && root["ack"].as<bool>())
     {
-        pApp.Ack();
+        cmd.ok = pApp.Ack();
+        cmd.message = cmd.ok ? "acknowledged" : "nothing to acknowledge";
+        return cmd;
+    }
+    if(root["test_alert"].is<bool>() && root["test_alert"].as<bool>())
+    {
         cmd.ok = true;
-        cmd.message = "acknowledged";
+        cmd.testAlert = true;
+        cmd.message = "test alert: the phone should buzz within a sample period";
         return cmd;
     }
     if(root["maintenance"].is<bool>())
@@ -387,76 +444,74 @@ Command ApplyCommand(app::App& pApp, std::string_view pJson, const app::Clock& p
 
 std::size_t ExportCsv(const app::App& pApp, uint32_t pSinceSeq, ISink& pSink)
 {
-    char buf[160];
-    if(!Emit(pSink, buf, log::CsvHeader(buf))) return 0;
-    const log::RecordLog& l = pApp.LogA();
-    std::size_t n = 0;
-    for(std::size_t i = l.LowerBound(pSinceSeq); i < l.Count(); ++i)
-    {
-        const std::optional<log::Record> r = l.At(i);
-        if(!r.has_value()) continue;
-        if(!Emit(pSink, buf, log::CsvLine(*r, buf))) break;
-        ++n;
-    }
-    return n;
+    return RecordsCsv(pApp.LogA(), pSinceSeq, pSink);
 }
 
 std::size_t EventsCsv(const app::App& pApp, uint32_t pSinceSeq, ISink& pSink)
 {
-    char buf[160];
-    if(!Emit(pSink, buf, log::CsvHeader(buf))) return 0;
-    const log::RecordLog& l = pApp.LogE();
-    std::size_t n = 0;
-    for(std::size_t i = l.LowerBound(pSinceSeq); i < l.Count(); ++i)
-    {
-        const std::optional<log::Record> r = l.At(i);
-        if(!r.has_value()) continue;
-        if(!Emit(pSink, buf, log::CsvLine(*r, buf))) break;
-        ++n;
-    }
-    return n;
+    return RecordsCsv(pApp.LogE(), pSinceSeq, pSink);
 }
 
+// Both tiers start at the window's first row and stop at its last; a ring rotating under the stream (see RecordsCsv)
+// re-anchors on the time just written.
 std::size_t SeriesCsv(const app::App& pApp, char pTier, uint32_t pFromTs, uint32_t pToTs, uint32_t pEvery, ISink& pSink)
 {
     char buf[160];
     if(pEvery == 0) pEvery = 1;
     std::size_t n = 0;
+    std::size_t kept = 0;
     if(pTier == 'B')
     {
         static const char HEAD[] = "ts,do_min,do_avg,do_max,sat_avg,temp_min,temp_max,level_max\n";
         if(!pSink.Write(HEAD)) return 0;
         const log::AggregateLog& l = pApp.LogB();
-        std::size_t kept = 0;
-        for(std::size_t i = 0; i < l.Count(); ++i)
+        std::size_t i = FirstAggregateAtOrAfter(l, pFromTs);
+        while(i < l.Count())
         {
             const std::optional<log::Aggregate> a = l.At(i);
-            if(!a.has_value() || a->ts < pFromTs || a->ts > pToTs) continue;
-            if(kept++ % pEvery != 0) continue;
-            const int len = std::snprintf(buf, sizeof buf, "%lu,%.3f,%.3f,%.3f,%.2f,%.2f,%.2f,%u\n",
-                                          static_cast<unsigned long>(a->ts), a->doMin / 1000.0, a->doAvg / 1000.0,
-                                          a->doMax / 1000.0, a->satAvg / 100.0, a->tempMin / 100.0, a->tempMax / 100.0,
-                                          a->levelMax);
-            if(!Emit(pSink, buf, static_cast<std::size_t>(len))) break;
-            ++n;
+            if(!a.has_value())
+            {
+                ++i;
+                continue;
+            }
+            if(a->ts > pToTs) break;
+            const std::size_t before = l.Count();
+            if(kept++ % pEvery == 0)
+            {
+                const int len = std::snprintf(buf, sizeof buf, "%lu,%.3f,%.3f,%.3f,%.2f,%.2f,%.2f,%u\n",
+                                              static_cast<unsigned long>(a->ts), a->doMin / 1000.0, a->doAvg / 1000.0,
+                                              a->doMax / 1000.0, a->satAvg / 100.0, a->tempMin / 100.0,
+                                              a->tempMax / 100.0, a->levelMax);
+                if(!Emit(pSink, buf, static_cast<std::size_t>(len))) break;
+                ++n;
+            }
+            i = l.Count() < before ? FirstAggregateAtOrAfter(l, a->ts + 1) : i + 1;
         }
         return n;
     }
     static const char HEAD[] = "ts,do,sat,temp,level\n";
     if(!pSink.Write(HEAD)) return 0;
     const log::RecordLog& l = pApp.LogA();
-    std::size_t kept = 0;
-    for(std::size_t i = FirstAtOrAfter(l, pFromTs); i < l.Count(); ++i)
+    std::size_t i = FirstAtOrAfter(l, pFromTs);
+    while(i < l.Count())
     {
         const std::optional<log::Record> r = l.At(i);
-        if(!r.has_value() || r->type != log::Type::Measurement || r->ts < pFromTs) continue;
+        if(!r.has_value() || r->type != log::Type::Measurement || r->ts < pFromTs)
+        {
+            ++i;
+            continue;
+        }
         if(r->ts > pToTs) break;
-        if(kept++ % pEvery != 0) continue;
-        const int len =
-            std::snprintf(buf, sizeof buf, "%lu,%.3f,%.2f,%.2f,%u\n", static_cast<unsigned long>(r->ts),
-                          static_cast<double>(r->f0), static_cast<double>(r->f1), static_cast<double>(r->f2), r->level);
-        if(!Emit(pSink, buf, static_cast<std::size_t>(len))) break;
-        ++n;
+        const std::size_t before = l.Count();
+        if(kept++ % pEvery == 0)
+        {
+            const int len = std::snprintf(buf, sizeof buf, "%lu,%.3f,%.2f,%.2f,%u\n", static_cast<unsigned long>(r->ts),
+                                          static_cast<double>(r->f0), static_cast<double>(r->f1),
+                                          static_cast<double>(r->f2), r->level);
+            if(!Emit(pSink, buf, static_cast<std::size_t>(len))) break;
+            ++n;
+        }
+        i = l.Count() < before ? FirstAtOrAfter(l, r->ts + 1) : i + 1;
     }
     return n;
 }

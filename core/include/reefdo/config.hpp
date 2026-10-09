@@ -74,6 +74,27 @@ struct SignalsConfig
     const Signal& of(ladder::Level pLevel, bool pFault) const;
 };
 
+// What the phone app is woken for (gateway::cloud). Blue is a device level: by default it stays at the tank.
+struct PhoneAlerts
+{
+    bool blue = false;
+    bool yellow = true;
+    bool red = true;
+    bool fault = true;
+    bool testFail = true;
+    bool deviceLost = true;
+    bool operator==(const PhoneAlerts&) const = default;
+};
+
+// A restart once a day at a quiet hour, as a safety net for whatever only a reboot cures: taken at the first sample
+// within the hour after `minute` that finds nothing a reboot would interrupt or forget (app::App::RestartAllowed).
+struct RestartConfig
+{
+    bool daily = false;
+    uint16_t minute = 4 * 60; // local minutes after midnight
+    bool operator==(const RestartConfig&) const = default;
+};
+
 struct Config
 {
     uint32_t schema = 1;
@@ -87,6 +108,8 @@ struct Config
     selftest::Config test;
     SignalsConfig signals;
     boost::Config boost;
+    PhoneAlerts phone;
+    RestartConfig restart;
     bool operator==(const Config&) const = default;
 };
 

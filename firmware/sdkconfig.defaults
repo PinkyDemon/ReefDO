@@ -56,3 +56,7 @@ CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
 CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
 CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
 CONFIG_BT_CTRL_BLE_MAX_ACT=3
+
+# lwIP sockets: the web server (3 of its own + 6 clients, keep-alive on), the phone app's MQTT link, a Tuya plug and
+# the board's own web check all at once; the default 10 was the web server alone
+CONFIG_LWIP_MAX_SOCKETS=16

@@ -8,5 +8,6 @@ namespace web
 
 void Start();
 bool SetPassword(std::string_view pPassword); // persisted; empty restores the default
+bool Busy();                                  // a request is being answered (a long download, an OTA upload)
 
 } // namespace web

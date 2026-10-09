@@ -773,3 +773,47 @@ TEST_CASE("Alert suspend never starts in the sample the level went deeper", "[la
         REQUIRE(o.deviceOn[2]);
     }
 }
+
+TEST_CASE("The day's automatic ack is not a person's: the output says so; a pressed ack is", "[ladder]")
+{
+    Bench b; // 12:00: day
+    b.cfg.dayAlarm = DayAlarm::AutoAck;
+    Output o = b.Hold(5.00f, 60);
+    REQUIRE(o.level == Level::Yellow);
+    REQUIRE_FALSE(o.autoAcked);
+    o = b.Tick(5.00f); // heard for DAY_ACK_AFTER_S
+    REQUIRE(HasEvent(o, EventType::AutoAck));
+    REQUIRE(o.silenced);
+    REQUIRE(o.autoAcked);
+    o = b.Tick(5.00f, [](Input& pIn) { pIn.ackPressed = true; }); // now somebody has
+    REQUIRE(HasEvent(o, EventType::Ack));
+    REQUIRE(o.silenced);
+    REQUIRE_FALSE(o.autoAcked);
+    o = b.Hold(5.00f, 1800); // the pressed ack runs out: the alarm sounds, and is auto-acked again
+    REQUIRE(HasEvent(o, EventType::AutoAck));
+    REQUIRE(o.autoAcked);
+}
+
+TEST_CASE("An ack pressed in the sample the alarm re-arms is dropped: it was meant for the old alarm", "[ladder]")
+{
+    Bench b;
+    Output o = b.Hold(5.00f, 60);
+    REQUIRE(o.level == Level::Yellow);
+    o = b.Tick(4.00f, [](Input& pIn) { pIn.ackPressed = true; }); // Red in the same sample
+    REQUIRE(o.level == Level::Red);
+    REQUIRE_FALSE(HasEvent(o, EventType::Ack));
+    REQUIRE_FALSE(o.silenced);
+    REQUIRE(o.sound);
+    o = b.Tick(4.00f, [](Input& pIn) { pIn.ackPressed = true; }); // a sample later it counts
+    REQUIRE(HasEvent(o, EventType::Ack));
+    REQUIRE(o.silenced);
+
+    Bench f; // a FAULT entering in the sample of the ack
+    f.Hold(5.00f, 60);
+    for(int i = 0; i < 4; ++i)
+        f.Tick(std::nullopt);
+    o = f.Tick(std::nullopt, [](Input& pIn) { pIn.ackPressed = true; });
+    REQUIRE(o.fault);
+    REQUIRE_FALSE(HasEvent(o, EventType::Ack));
+    REQUIRE(o.sound);
+}

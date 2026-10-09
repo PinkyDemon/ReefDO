@@ -1,8 +1,11 @@
 #include "sampler.hpp"
 
+#include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <iterator>
 
 #include <sys/time.h>
 
@@ -10,16 +13,19 @@
 
 #include "board.hpp"
 #include "cloud_link.hpp"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_system.h"
 #include "esp_task_wdt.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "hal/flash_store.hpp"
 #include "hal/nvs_store.hpp"
+#include "net.hpp"
 #include "sdkconfig.h"
 
 namespace sampler
@@ -66,6 +72,13 @@ static_assert(sizeof(TestBlob) >= sizeof(TestBlobSix), "one buffer reads both la
 
 static_assert(static_cast<std::size_t>(board::RELAY_COUNT) == reefdo::RELAYS, "the core's relay count is the board's");
 
+// A health report on its way into the log (ReportSystem → the sampler's tick).
+struct SystemReport
+{
+    reefdo::app::SystemEvent event;
+    float f0, f1, f2;
+};
+
 struct Host
 {
     hal::FlashStore a, b, e, d;
@@ -81,10 +94,13 @@ struct Host
     ProbeSource source = ProbeSource::Rk500; // the real probe unless NVS says otherwise
 #endif
     int32_t tz = 0;
-    Indication ind;
+    Indication ind;                                      // the indicator's snapshot, under indLock (not the mutex)
+    portMUX_TYPE indLock = portMUX_INITIALIZER_UNLOCKED; // the LED task reads it 20 times a second
     bool hung = false;
     bool imageValid = false;
+    uint32_t heapHour = UINT32_MAX; // the uptime hour the heap was last logged in
     SemaphoreHandle_t mtx = nullptr;
+    QueueHandle_t reports = nullptr;    // SystemReport, from any task
     char json[reefdo::config::DOC_MAX]; // scratch for config documents (under the lock)
     char configState[160] = "defaults"; // "stored", "defaults" or "rejected at <path>: <message>"
 };
@@ -198,9 +214,10 @@ uint16_t LocalMinute(const reefdo::app::Clock& pC)
 
 void LogNotification(const reefdo::app::Notification& pN)
 {
-    static const char* const KIND[] = {"level",     "fault",       "fault-cleared",
-                                       "recovered", "test-fail",   "test-inconclusive",
-                                       "boot",      "device-lost", "device-back"};
+    static const char* const KIND[] = {
+        "level", "fault",       "fault-cleared", "recovered", "test-fail", "test-inconclusive",
+        "boot",  "device-lost", "device-back",   "test-alert"};
+    static_assert(std::size(KIND) == static_cast<std::size_t>(reefdo::app::NotifyKind::TestAlert) + 1);
     ESP_LOGW(TAG, "notify %s%s: level=%d device=%u value=%.2f%s", KIND[static_cast<int>(pN.kind)],
              pN.repeat ? " (repeat)" : "", static_cast<int>(pN.level), pN.device, static_cast<double>(pN.value),
              pN.urgent ? " URGENT" : "");
@@ -229,6 +246,24 @@ void ApplyRelaysLocked()
         board::SetRelay(static_cast<int>(i), s.relayEnergised[i]);
 }
 
+// What the other tasks reported since the last sample, and the heap once an hour (the first right after the boot),
+// with the tightest stack margin of the tasks that do the network work.
+void LogHealthLocked(const reefdo::app::Clock& pClock)
+{
+    SystemReport r{};
+    while(xQueueReceive(sHost.reports, &r, 0) == pdTRUE)
+        sHost.app->LogSystem(pClock, r.event, r.f0, r.f1, r.f2);
+    const uint32_t hour = sHost.app->GetStatus().uptimeS / 3600u;
+    if(hour == sHost.heapHour) return;
+    sHost.heapHour = hour;
+    const uint32_t stack = std::min(
+        {static_cast<uint32_t>(uxTaskGetStackHighWaterMark(nullptr)), net::StackLeft(), cloud_link::StackLeft()});
+    sHost.app->LogSystem(pClock, reefdo::app::SystemEvent::Heap, static_cast<float>(esp_get_free_heap_size()) / 1024.0f,
+                         static_cast<float>(esp_get_minimum_free_heap_size()) / 1024.0f,
+                         static_cast<float>(heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT)) / 1024.0f,
+                         static_cast<float>(stack));
+}
+
 void TickLocked()
 {
     const reefdo::app::Clock c = ClockNow();
@@ -237,17 +272,22 @@ void TickLocked()
     sHost.app->Tick(c);
     const reefdo::app::Status& s = sHost.app->GetStatus();
     ApplyRelaysLocked();
+    LogHealthLocked(c);
 
-    sHost.ind.level = s.level;
-    sHost.ind.sound = s.sound;
-    sHost.ind.fault = s.fault;
-    sHost.ind.maintenance = s.maintenance;
-    sHost.ind.testRunning = s.testRunning;
-    sHost.ind.anyFailed = false;
+    Indication ind = sHost.ind;
+    ind.level = s.level;
+    ind.sound = s.sound;
+    ind.fault = s.fault;
+    ind.maintenance = s.maintenance;
+    ind.testRunning = s.testRunning;
+    ind.anyFailed = false;
     for(const bool f : s.deviceFailed)
-        sHost.ind.anyFailed |= f;
-    sHost.ind.chirps += s.chirp ? 1u : 0u;
-    sHost.ind.signals = sHost.app->GetConfig().signals;
+        ind.anyFailed |= f;
+    ind.chirps += s.chirp ? 1u : 0u;
+    ind.signals = sHost.app->GetConfig().signals;
+    taskENTER_CRITICAL(&sHost.indLock);
+    sHost.ind = ind;
+    taskEXIT_CRITICAL(&sHost.indLock);
 
     const reefdo::app::Notifications notes = sHost.app->TakeNotifications();
     for(const reefdo::app::Notification& n : notes)
@@ -255,6 +295,8 @@ void TickLocked()
     cloud_link::OnSample(*sHost.app, c, std::span<const reefdo::app::Notification>(notes.begin(), notes.size()));
     if(sHost.app->TestPersistentChanged()) SaveTest();
     MarkImageValid(s);
+    // The quiet hour's safety net; never while the phone app's Bluetooth window is open (the App cannot see that).
+    if(s.restartDue && !cloud_link::Linking()) Restart(reefdo::app::RestartWhy::Daily);
 }
 
 void Task(void*)
@@ -311,8 +353,10 @@ reefdo::app::Clock ClockNow()
 
 Indication GetIndication()
 {
-    Guard guard;
-    return sHost.ind;
+    taskENTER_CRITICAL(&sHost.indLock);
+    const Indication ind = sHost.ind;
+    taskEXIT_CRITICAL(&sHost.indLock);
+    return ind;
 }
 
 ProbeSource GetProbeSource()
@@ -320,9 +364,9 @@ ProbeSource GetProbeSource()
     return sHost.source;
 }
 
-void SetProbeSource(ProbeSource pSrc)
+bool SetProbeSource(ProbeSource pSrc)
 {
-    hal::nvs::SetI32(KEY_PROBE, static_cast<int32_t>(pSrc));
+    return hal::nvs::SetI32(KEY_PROBE, static_cast<int32_t>(pSrc));
 }
 
 reefdo::sim::Tank* Tank()
@@ -344,6 +388,7 @@ bool ApplyConfigJson(std::string_view pJson, reefdo::config::LoadResult& pOut)
     if(!SaveConfig())
     {
         ESP_LOGE(TAG, "config applied but not saved");
+        std::strcpy(sHost.configState, "unsaved"); // the page warns: what runs is not what the flash holds
         pOut.error = reefdo::config::LoadError::Invalid;
         pOut.path.assign("nvs");
         pOut.message.assign("applied, but not saved to flash: lost at the next reboot");
@@ -404,9 +449,34 @@ void Hang()
     sHost.hung = true;
 }
 
+void ReportSystem(reefdo::app::SystemEvent pEvent, float pF0, float pF1, float pF2)
+{
+    const SystemReport r{pEvent, pF0, pF1, pF2};
+    if(sHost.reports == nullptr || xQueueSend(sHost.reports, &r, 0) != pdTRUE)
+        ESP_LOGW(TAG, "health report %d dropped", static_cast<int>(pEvent));
+}
+
+void Restart(reefdo::app::RestartWhy pWhy)
+{
+    static const char* const WHY[] = {"command", "daily", "web server dead", "firmware update"};
+    static_assert(std::size(WHY) == static_cast<std::size_t>(reefdo::app::RestartWhy::Update) + 1);
+    {
+        Guard guard;
+        sHost.app->LogSystem(ClockNow(), reefdo::app::SystemEvent::Restart, static_cast<float>(pWhy));
+    }
+    ESP_LOGW(TAG, "restarting: %s", WHY[static_cast<int>(pWhy)]);
+    std::fflush(stdout);
+    vTaskDelay(pdMS_TO_TICKS(1000)); // the record is on flash already; the answer on the wire gets out
+    // A dead web server is the one case worth a panic: the core dump on flash keeps every task's stack, the
+    // httpd's included, for `idf.py coredump-info`; a clean restart would throw the evidence away.
+    if(pWhy == reefdo::app::RestartWhy::WebDead) abort();
+    esp_restart();
+}
+
 bool Start()
 {
     sHost.mtx = xSemaphoreCreateRecursiveMutex();
+    sHost.reports = xQueueCreate(16, sizeof(SystemReport));
     Guard guard;
 
     int32_t v = 0;

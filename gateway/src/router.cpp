@@ -69,13 +69,25 @@ bool Base64Decode(std::string_view pIn, std::span<char> pOut, std::size_t& pLen)
     return true;
 }
 
-// Compares every byte whatever the first mismatch: no timing hint about the password.
-bool SameSecret(std::string_view pA, std::string_view pB)
+// Compares every byte whatever the first mismatch, over the stored password's length: neither the content nor
+// the length of a guess shows in the time it takes.
+bool SameSecret(std::string_view pGuess, std::string_view pStored)
 {
-    uint32_t diff = static_cast<uint32_t>(pA.size() ^ pB.size());
-    for(std::size_t i = 0; i < pA.size() && i < pB.size(); ++i)
-        diff |= static_cast<uint32_t>(static_cast<uint8_t>(pA[i]) ^ static_cast<uint8_t>(pB[i]));
+    uint32_t diff = static_cast<uint32_t>(pGuess.size() ^ pStored.size());
+    for(std::size_t i = 0; i < pStored.size(); ++i)
+    {
+        const uint8_t g = i < pGuess.size() ? static_cast<uint8_t>(pGuess[i]) : 0u;
+        diff |= static_cast<uint32_t>(g ^ static_cast<uint8_t>(pStored[i]));
+    }
     return diff == 0;
+}
+
+// A stored string with a control character in it (a %00 in the form) would be cut short in NVS and never match again.
+bool Printable(std::string_view pS)
+{
+    for(const char c : pS)
+        if(static_cast<uint8_t>(c) < 0x20) return false;
+    return true;
 }
 
 void Json(Context& pC, std::size_t pLen)
@@ -133,8 +145,16 @@ void PutConfig(Context& pC)
 
 void PostCmd(Context& pC)
 {
-    const Command c = ApplyCommand(pC.app, pC.req.body, pC.clock);
+    Command c = ApplyCommand(pC.app, pC.req.body, pC.clock);
     if(c.setUnix.has_value()) pC.platform.SetTime(*c.setUnix, c.setTz);
+    if(c.testAlert) // a push needs the link up, or it would sit in no queue at all
+    {
+        c.ok = pC.platform.Sys().cloud.view() == "online";
+        if(c.ok)
+            pC.app.TestAlert(pC.clock);
+        else
+            c.message = "the phone app is not online";
+    }
     pC.platform.OutputsChanged();
     const int n = std::snprintf(pC.scratch.data(), pC.scratch.size(), "{\"ok\":%s,\"message\":\"%s\"}",
                                 c.ok ? "true" : "false", c.message);
@@ -191,8 +211,8 @@ void PostWifi(Context& pC)
     FixedString<32> ssid;
     FixedString<64> pass;
     const bool ok = FormValue(pC.req.body, "ssid", ssid) == Form::Ok &&
-                    FormValue(pC.req.body, "pass", pass) != Form::TooLong &&
-                    pC.platform.SetWifi(ssid.view(), pass.view());
+                    FormValue(pC.req.body, "pass", pass) != Form::TooLong && Printable(ssid.view()) &&
+                    Printable(pass.view()) && pC.platform.SetWifi(ssid.view(), pass.view());
     JsonOk(pC, ok);
 }
 
@@ -200,7 +220,8 @@ void PostWifi(Context& pC)
 void PostPassword(Context& pC)
 {
     FixedString<PASSWORD_MAX> pw;
-    const bool ok = FormValue(pC.req.body, "password", pw) == Form::Ok && pC.platform.SetPassword(pw.view());
+    const bool ok = FormValue(pC.req.body, "password", pw) == Form::Ok && Printable(pw.view()) &&
+                    pC.platform.SetPassword(pw.view());
     JsonOk(pC, ok);
 }
 

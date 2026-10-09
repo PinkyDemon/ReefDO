@@ -1,7 +1,8 @@
 #pragma once
 // What ReefDO shows and accepts in a phone app through a cloud (ESP RainMaker Neo on the board, a fake in the
 // simulator), without the cloud's SDK: a handful of parameters, their updates within a small message budget,
-// and the two things the app may do — acknowledge and suspend the current alert. The board never waits for it.
+// the pushes config.phone asks for, and the two things the app may do — acknowledge and suspend the current alert.
+// The board never waits for it.
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -142,6 +143,8 @@ private:
     std::array<TrendText, TRENDS> mRowShown;
     std::array<uint64_t, TRENDS> mRowAtMs{};
     std::optional<uint32_t> mLiveFromTs; // the first sample seen: the refill stops short of it
+    std::optional<uint32_t> mNewestTs;   // the newest sample merged: the rows end with its block
+    std::optional<int32_t> mTz;          // the zone the blocks were laid out in: a change starts them over
     bool mFilled = false;
     bool mTrendsWereOnline = false;
 
@@ -157,7 +160,7 @@ private:
     uint32_t mPushes = 0;
 };
 
-// The status line: "Yellow · 4.31 mg/L · sudden drop · suspended 23 min".
-Text StatusLine(const app::Status& pS);
+// The status line: "Yellow · 4.31 mg/L · sudden drop · suspended 23 min"; a test alert's starts with "Test alert".
+Text StatusLine(const app::Status& pS, bool pTestAlert = false);
 
 } // namespace reefdo::gateway::cloud

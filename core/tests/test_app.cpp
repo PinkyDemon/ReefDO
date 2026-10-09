@@ -1053,3 +1053,314 @@ TEST_CASE("Alert suspend is refused in a FAULT", "[app]")
     REQUIRE(s.app.GetStatus().fault);
     REQUIRE_FALSE(s.app.SuspendAlerts(600));
 }
+
+TEST_CASE("Ack does nothing, and logs nothing, when there is nothing to acknowledge", "[app]")
+{
+    using reefdo::ladder::EventType;
+    Scenario s;
+    s.Start();
+    s.RunS(60);
+    const std::size_t events = s.EventsOf(Type::Event);
+    REQUIRE_FALSE(s.app.Ack()); // Normal, no FAULT: a stray press from the phone
+    s.Tick();
+    REQUIRE(s.EventsOf(Type::Event) == events);
+    REQUIRE_FALSE(s.app.GetStatus().silenced);
+
+    s.tank.SetSat(55.0f);
+    s.RunS(120);
+    REQUIRE(s.app.GetStatus().level == Level::Red);
+    REQUIRE(s.app.Ack());
+    s.Tick();
+    REQUIRE(s.app.GetStatus().silenced);
+    const std::optional<reefdo::log::Record> ev = LastOf(s.app.LogE(), Type::Event);
+    REQUIRE((ev->aux & 0xFFu) == static_cast<uint32_t>(EventType::Ack));
+}
+
+TEST_CASE("A test alert is logged as a command and handed on as a notification", "[app]")
+{
+    Scenario s;
+    s.Start();
+    s.RunS(60);
+    s.app.TestAlert(s.clock);
+    s.Tick();
+    REQUIRE(s.NotesOf(NotifyKind::TestAlert) == 1);
+    const std::vector<CommandRec> cmds = Commands(s);
+    REQUIRE(cmds.size() == 1);
+    REQUIRE(cmds[0].aux == 12);
+}
+
+TEST_CASE("System records go to tier A and the events; the hourly heap line to tier A only", "[app]")
+{
+    using reefdo::app::SystemEvent;
+    Scenario s;
+    s.Start();
+    s.RunS(60);
+    s.app.LogSystem(s.clock, SystemEvent::WifiLost, 3600.0f, 201.0f);
+    s.app.LogSystem(s.clock, SystemEvent::Heap, 84.5f, 39.3f, 60.0f);
+    REQUIRE(s.EventsOf(Type::System) == 1);
+    REQUIRE(s.RecordsOf(Type::System) == 2);
+    const std::optional<reefdo::log::Record> e = LastOf(s.app.LogE(), Type::System);
+    REQUIRE(e->aux == static_cast<uint32_t>(SystemEvent::WifiLost));
+    REQUIRE(e->f0 == 3600.0f);
+    REQUIRE(e->f1 == 201.0f);
+    REQUIRE(e->ts == *s.clock.unixS);
+    const std::optional<reefdo::log::Record> a = LastOf(s.app.LogA(), Type::System);
+    REQUIRE(a->aux == static_cast<uint32_t>(SystemEvent::Heap));
+    REQUIRE(a->f0 == 84.5f);
+    REQUIRE(a->f2 == 60.0f);
+}
+
+TEST_CASE("RestartAllowed: nothing a reboot would interrupt or forget", "[app]")
+{
+    Scenario s;
+    s.Start();
+    s.RunS(60);
+    REQUIRE(s.app.RestartAllowed());
+    s.app.SetMaintenance(true, s.clock);
+    REQUIRE_FALSE(s.app.RestartAllowed());
+    s.app.SetMaintenance(false, s.clock);
+    REQUIRE(s.app.RestartAllowed());
+    REQUIRE(s.app.SuspendDevice(0, 300, s.clock));
+    REQUIRE_FALSE(s.app.RestartAllowed()); // a device out of order: a reboot would put it back
+    REQUIRE(s.app.SuspendDevice(0, 0, s.clock));
+    REQUIRE(s.app.SetManual(1, true, s.clock));
+    REQUIRE_FALSE(s.app.RestartAllowed()); // switched by hand: forgotten by a reboot
+    REQUIRE(s.app.SetManual(1, std::nullopt, s.clock));
+    REQUIRE(s.app.RestartAllowed());
+    s.app.RunTest();
+    s.Tick();
+    REQUIRE(s.app.GetStatus().testRunning);
+    REQUIRE_FALSE(s.app.RestartAllowed());
+
+    Scenario red;
+    red.Start();
+    red.RunS(60);
+    red.tank.SetSat(55.0f);
+    red.RunS(120);
+    REQUIRE(red.app.GetStatus().level == Level::Red);
+    REQUIRE_FALSE(red.app.RestartAllowed());
+
+    Scenario fault;
+    fault.Start();
+    fault.probe.Model().dropout = true;
+    fault.RunS(120);
+    REQUIRE(fault.app.GetStatus().fault);
+    REQUIRE_FALSE(fault.app.RestartAllowed());
+
+    reefdo::config::Config c = ExampleConfig();
+    c.boost.enabled = true;
+    c.boost.windowStartMin = 18 * 60 + 10;
+    c.boost.windowEndMin = 18 * 60 + 40;
+    c.boost.devices[2] = true;
+    Scenario boost(c);
+    boost.Start();
+    boost.tank.SetSat(90.0f);
+    boost.RunUntil(18, 10);
+    boost.RunS(30);
+    REQUIRE(boost.app.GetStatus().boostRunning);
+    REQUIRE_FALSE(boost.app.RestartAllowed());
+}
+
+TEST_CASE("The daily restart is due at the first quiet sample within its hour, once a day, not soon after a boot",
+          "[app]")
+{
+    using reefdo::app::RESTART_MIN_UPTIME_S;
+    reefdo::config::Config c = ExampleConfig();
+    c.restart.daily = true;
+    c.restart.minute = 18 * 60 + 30; // half an hour after the scenario's 18:00 boot: too soon today
+    Scenario s(c);
+    s.Start();
+    std::size_t due = 0;
+    auto run = [&](uint32_t pHh, uint32_t pMm)
+    {
+        const uint16_t target = static_cast<uint16_t>(pHh * 60 + pMm);
+        do
+        {
+            s.Tick();
+            due += s.app.GetStatus().restartDue;
+        } while(s.MinuteOfDay() != target);
+    };
+    run(19, 45); // the whole window, with less than RESTART_MIN_UPTIME_S of uptime
+    REQUIRE(s.app.GetStatus().uptimeS < RESTART_MIN_UPTIME_S);
+    REQUIRE(due == 0);
+    run(18, 29); // the next day, up to the window
+    REQUIRE(due == 0);
+    REQUIRE(s.app.SetManual(5, true, s.clock)); // not quiet at the hour itself
+    run(18, 45);
+    REQUIRE(due == 0);
+    REQUIRE(s.app.SetManual(5, std::nullopt, s.clock));
+    s.Tick(); // quiet again, still inside the window: now
+    REQUIRE(s.app.GetStatus().restartDue);
+    s.Tick();
+    REQUIRE_FALSE(s.app.GetStatus().restartDue); // one sample only
+    run(19, 45);
+    REQUIRE(due == 0); // and not again that day
+    run(18, 31);       // the day after: on time
+    REQUIRE(due == 1);
+
+    reefdo::config::Config off = c; // not asked for: never
+    off.restart.daily = false;
+    Scenario q(off);
+    q.Start();
+    q.RunS(26 * 3600);
+    REQUIRE_FALSE(q.app.GetStatus().restartDue);
+    reefdo::config::Config busy = c; // never quiet in the window (the whole hour by hand): skipped that day
+    Scenario b(busy);
+    b.Start();
+    b.RunUntil(18, 29);
+    b.RunS(24 * 3600);
+    REQUIRE(b.app.SetManual(5, true, b.clock));
+    bool everDue = false;
+    for(int i = 0; i < 70 * 6; ++i)
+    {
+        b.Tick();
+        everDue = everDue || b.app.GetStatus().restartDue;
+    }
+    REQUIRE_FALSE(everDue);
+    Scenario nc(c); // no clock: no local time, no restart
+    nc.clockKnown = false;
+    nc.Start();
+    for(int i = 0; i < 3 * 360; ++i)
+    {
+        nc.Tick();
+        REQUIRE_FALSE(nc.app.GetStatus().restartDue);
+    }
+}
+
+TEST_CASE("By day with auto_ack the alarm still repeats its push: nobody has acknowledged it", "[app]")
+{
+    reefdo::config::Config c = ExampleConfig();
+    c.ladder.dayAlarm = reefdo::ladder::DayAlarm::AutoAck;
+    Scenario s(c); // 18:00: day
+    s.Start();
+    s.RunS(600);
+    s.tank.SetSat(55.0f);
+    s.RunS(120);
+    REQUIRE(s.app.GetStatus().level == Level::Red);
+    REQUIRE(s.app.GetStatus().silenced); // heard for 10 s, then acknowledged by itself
+    REQUIRE(s.app.GetStatus().autoAcked);
+    const std::size_t before = s.NotesOf(NotifyKind::Level);
+    s.tank.SetSat(55.0f);
+    s.RunS(10 * 60 + 30);
+    REQUIRE(s.NotesOf(NotifyKind::Level) == before + 5); // every 2 min, as at night
+    REQUIRE(s.app.Ack());                                // a person: the repeats stop
+    s.Tick();
+    REQUIRE_FALSE(s.app.GetStatus().autoAcked);
+    const std::size_t heard = s.NotesOf(NotifyKind::Level);
+    s.tank.SetSat(55.0f);
+    s.RunS(10 * 60);
+    REQUIRE(s.NotesOf(NotifyKind::Level) == heard);
+}
+
+TEST_CASE("After a probe outage the ladder judges the new readings, not the ones before the gap", "[app]")
+{
+    Scenario s;
+    s.Start();
+    s.RunS(600);
+    s.tank.SetSat(72.0f);
+    s.RunS(300);
+    REQUIRE(s.app.GetStatus().level == Level::Yellow);
+    s.tank.SetSat(82.0f); // above Yellow's exit: the recovery timer starts...
+    s.RunS(120);
+    REQUIRE(s.app.GetStatus().level == Level::Yellow);
+    s.probe.Model().dropout = true; // ...and the probe dies for 20 minutes while the tank crashes and stays down
+    for(int i = 0; i < 120; ++i)    // (held there: the virtual tank's surface exchange would lift it again)
+    {
+        s.tank.SetSat(50.0f);
+        s.Tick();
+    }
+    REQUIRE(s.app.GetStatus().fault);
+    REQUIRE_FALSE(s.app.GetStatus().tempC.has_value()); // no reading, no temperature
+    s.probe.Model().dropout = false;
+    for(int i = 0; i < 30; ++i) // the probe's own lag (tau 17 s) takes a few samples to reach the tank
+    {
+        s.tank.SetSat(50.0f);
+        s.Tick();
+        REQUIRE(s.app.GetStatus().level != Level::Blue); // never a step down on the stale medians
+    }
+    REQUIRE(s.app.GetStatus().level == Level::Red);
+    REQUIRE(s.app.GetStatus().tempC.has_value());
+}
+
+TEST_CASE("A day without a reading leaves nothing for the next day's summary", "[app]")
+{
+    Scenario s;
+    s.Start();
+    s.RunUntil(23, 50);
+    s.probe.Model().dropout = true; // the probe is dead for the whole of the next day
+    s.RunUntil(0, 10);
+    s.RunUntil(0, 10);
+    const uint32_t day3 = static_cast<uint32_t>((static_cast<int64_t>(*s.clock.unixS) + TZ) / 86400);
+    s.probe.Model().dropout = false;
+    s.RunUntil(0, 10); // through day 3 into day 4: its summary is written
+    std::size_t events = 0;
+    for(std::size_t i = 0; i < s.app.LogE().Count(); ++i)
+    {
+        const std::optional<reefdo::log::Record> r = s.app.LogE().At(i);
+        const bool counted = r->type == Type::Event || r->type == Type::Test || r->type == Type::Boost;
+        events += counted && static_cast<uint32_t>((static_cast<int64_t>(r->ts) + TZ) / 86400) == day3;
+    }
+    REQUIRE(events > 0); // the FAULT clearing, at least
+    const std::optional<reefdo::log::Record> daily = LastOf(s.app.LogD(), Type::Daily);
+    REQUIRE(daily.has_value());
+    REQUIRE((daily->aux >> 24) == events); // day 2's skipped test is not in it
+}
+
+TEST_CASE("The daily correction record is written for a test window that starts at midnight", "[app]")
+{
+    reefdo::config::Config c = ExampleConfig();
+    c.test.windowStartMin = 0;
+    c.test.windowEndMin = 90;
+    Scenario s(c);
+    s.Start();
+    s.RunUntil(0, 5);
+    std::size_t daily = 0;
+    for(std::size_t i = 0; i < s.app.LogE().Count(); ++i)
+    {
+        const std::optional<reefdo::log::Record> r = s.app.LogE().At(i);
+        daily += r->type == Type::Correction && r->aux == 1;
+    }
+    REQUIRE(daily == 1);
+}
+
+TEST_CASE("Without a clock a skipped scheduled test waits another day, like a day with one", "[app]")
+{
+    reefdo::config::Config c = ExampleConfig(); // no device acts on the level: the tank stays below Normal
+    for(std::size_t i = 0; i < reefdo::DEVICES; ++i)
+        c.ladder.devices[i].trigger = Trigger::None;
+    Scenario nc(c);
+    nc.clockKnown = false;
+    nc.Start();
+    nc.RunS(600);
+    nc.app.RunTest();
+    nc.RunS(30 * 60); // the run, by hand, sets the 24 h mark
+    REQUIRE_FALSE(nc.app.GetStatus().testRunning);
+    for(int i = 0; i < 26 * 360; ++i) // an alert standing when the scheduled attempt comes: skipped
+    {
+        nc.tank.SetSat(80.0f); // held there against the virtual tank's own surface exchange
+        nc.Tick();
+    }
+    REQUIRE(nc.app.GetStatus().level != Level::Normal);
+    std::size_t skipped = 0;
+    for(std::size_t i = 0; i < nc.app.LogE().Count(); ++i)
+    {
+        const std::optional<reefdo::log::Record> r = nc.app.LogE().At(i);
+        skipped +=
+            r->type == Type::Test && (r->aux & 0xFFu) == static_cast<uint32_t>(reefdo::selftest::EventType::Skipped);
+    }
+    REQUIRE(skipped == 1); // not one per sample
+}
+
+TEST_CASE("With no device to test nothing is scheduled, and nothing logged about it", "[app]")
+{
+    reefdo::config::Config c = ExampleConfig();
+    for(std::size_t i = 0; i < reefdo::DEVICES; ++i)
+        c.test.devices[i].testS = 0;
+    Scenario s(c);
+    s.Start();
+    s.RunS(2 * 24 * 3600);
+    REQUIRE(s.EventsOf(Type::Test) == 0);
+    s.app.RunTest(); // by hand it still says so
+    s.Tick();
+    REQUIRE(s.EventsOf(Type::Test) == 1);
+}

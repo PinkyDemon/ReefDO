@@ -168,7 +168,8 @@ Every setting on the Config page has a tooltip.
 ## Using it
 
 - **Status**: live values, level, devices, test state. **Acknowledge** silences the buzzer and any
-  ack-silenced device for a while; it never lowers the level. **Suspend alert** (5–60 min) is for a false alarm —
+  ack-silenced device for a while; it never lowers the level, and does nothing at Normal without a FAULT (nothing
+  to acknowledge: a stray press changes and logs nothing). **Suspend alert** (5–60 min) is for a false alarm —
   a snail on the probe: the alert's devices and alarm go back to what they do at Normal, while the level, the
   log and the chart carry on. Only during an alert, never in a FAULT; a deeper level, a FAULT or the end of the
   alert resumes it early (logged, shaded on the chart). Windows, the test, the boost and manual switches are not
@@ -189,7 +190,24 @@ Every setting on the Config page has a tooltip.
   exclusive test starting — and then it is *auto* again. *Off* by hand also stops a device an alert wants on,
   until the level changes; the card says "off by hand · wanted: ladder" meanwhile. Refused while an exclusive
   test runs.
+- **Boost**: once a day inside its window, the ticked devices run until DO has stayed at the target for
+  `boost.hold_s` (default 5 min) or the window ends. The hold is there because a pump's first bubbles lift the
+  reading at the probe long before the tank follows; a dip below the target starts it over.
 - **Export**: CSV of everything, incrementally since the last export.
+- **Events** also list the board's own health as *System* records: Wi-Fi lost (with the driver's reason) and
+  back, the phone app's cloud down and up — each with how long the previous state lasted — the web server
+  failing the board's own check, and every restart with its reason; the export adds the free heap once an hour.
+  The System card shows the heap.
+- **Keeping itself alive**: once a minute the board asks its own web server for `/api/sys`. Five misses in a row
+  (each logged) mean the server is dead for a browser too, and the board restarts — once nothing a reboot would
+  interrupt or forget is running: Normal, no FAULT, no test, boost or maintenance, no device out of order or
+  switched by hand. The optional **daily restart** (`restart.daily`, `restart.time`; off by default) is the same
+  safety net on a schedule: the first quiet sample within the hour after the time, once a day, never within two
+  hours of a boot; a busy hour skips the day. Both are logged as *Restart*, and the NC devices run for the few
+  seconds of the reboot. The restart for a dead web server is a panic on purpose: it leaves a core dump on flash
+  (`idf.py coredump-info` over USB) that says where the server sat. The sampling loop itself is guarded by the
+  task watchdog as before. The web server takes six clients at a time, probes idle ones and closes the dead, so a
+  phone that left without closing cannot hold a slot for ever.
 - **LED**: green steady = OK online, green blinking = OK offline, blue 1 Hz / yellow 2 Hz / red 4 Hz =
   alert, blue/red alternating = FAULT, cyan = maintenance, white pulse = test run, purple flash = a
   device failed its last check.
@@ -211,7 +229,7 @@ Every setting on the Config page has a tooltip.
 | `config get` · `config set <json>` · `config reset` | partial documents are fine; `'single quotes'` become `"` |
 | `time [unix [tz]]` · `wifi …` · `passwd <new>` · `passwd reset` | |
 | `buzzer test <pattern> <vol> [hz] [s]` · `buzzer mute\|unmute` | try patterns · mute for testing |
-| `cloud` · `cloud link` · `cloud forget yes` | the phone app: its state · open the Bluetooth link window · unlink (erases the certificate; the next link uses up one of the account's 20 node IDs) |
+| `cloud` · `cloud link` · `cloud test` · `cloud forget yes` | the phone app: its state · open the Bluetooth link window · one push now, to see it arrive · unlink (erases the certificate; the next link uses up one of the account's 20 node IDs) |
 | `probe sim\|rk500` | run on a simulated tank instead of the probe (after reboot) |
 | `debug sim …` · `debug uart mute\|corrupt\|ok` · `debug hang` | fault injection |
 | `export [since]` · `events [since]` · `reboot` · `factory yes` | |
@@ -225,7 +243,7 @@ Reads are open; writes need Basic auth (`reef` / your password), e.g. `curl -u r
 | `GET /api/status` · `/api/test` · `/api/config` · `/api/sys` | JSON |
 | `GET /api/slots` | every output type's parameters as JSON Schema (titles, help, limits, defaults) |
 | `PUT /api/config` | full or partial document, validated |
-| `POST /api/cmd` | `{"ack":true}` · `{"suspend_alerts":{"s":secs,"level":shown}}` (`0` resumes; refused if the level is now deeper than `level`) · `{"maintenance":b}` · `{"test":"run"}` · `{"cal":"air"}` · `{"suspend":{"device":n,"s":secs}}` (`0` puts it back) · `{"manual":{"device":n,"on":b|null}}` (`null` = auto) · `{"clear":{"device":n}}` (a failed test verdict) · `{"time":{"unix":s,"tz":s}}` |
+| `POST /api/cmd` | `{"ack":true}` (refused at Normal without a FAULT) · `{"suspend_alerts":{"s":secs,"level":shown}}` (`0` resumes; refused if the level is now deeper than `level`) · `{"maintenance":b}` · `{"test":"run"}` · `{"cal":"air"}` · `{"suspend":{"device":n,"s":secs}}` (`0` puts it back) · `{"manual":{"device":n,"on":b|null}}` (`null` = auto) · `{"clear":{"device":n}}` (a failed test verdict) · `{"time":{"unix":s,"tz":s}}` · `{"test_alert":true}` (a push to the phone app; refused while it is not online) |
 | `GET /api/series?tier=A\|B&from&to&every` · `/api/events?since` · `/api/export.csv?since` | CSV |
 | `POST /api/wifi` · `/api/passwd` · `/api/ota` · `/api/buzzer-test` · `/api/mute` · `/api/cloud-link` | |
 
@@ -235,7 +253,7 @@ Reads are open; writes need Basic auth (`reef` / your password), e.g. `curl -u r
 `recover_sustain_s`, `night.{start,end,lock,unknown_time_is_night,day_alarm}` (`day_alarm`: `sound` (default),
 `auto_ack` or `suppress`), `sudden_drop.{slope_mgl_per_10min,extend_s}` (default 3 and 600; the slope must be
 steeper than Blue's slope trigger, 0 = off; `extend_s` 0..3600), `pulse.{s,min_interval_s}`,
-`fault.{consecutive_failures,stuck_minutes,level,alert}`, `ack_silence_s`,
+`fault.{consecutive_failures,stuck_minutes,level,alert}` (`stuck_minutes` 5..1440), `ack_silence_s`,
 `devices."1".."8".{name,slot,trigger,mode,ack_silences,test_s,min_response_pct,boost,windows}`
 (slot: the device's output, `{"type":"none"}`, `{"type":"relay","channel":1..6,"wiring":"NO"|"NC"}` or
 `{"type":"tuya","id","ip","key","version":"3.3"|"3.4"|"3.5","dp":1..255}` — `GET /api/slots` lists every type's
@@ -248,7 +266,9 @@ end is earlier; not for pulse or alarm devices),
 is measured or judged; `no_fail_above_mgl`, default 6.1, 0 = off: a device that misses its response after
 starting at or above this DO is unchecked, not FAIL; a stored document with the old `service` / `service_s`
 names still loads),
-`boost.{enabled,window,target_mgl}`,
+`boost.{enabled,window,target_mgl,hold_s}` (`hold_s`, default 300, 0..3600: DO must stay at the target this long),
+`phone.alerts.{blue,yellow,red,fault,test_fail,device_lost}` (what wakes the phone; default all but `blue`),
+`restart.{daily,time}` (a daily restart at the first quiet sample within the hour after `time`; default off, 04:00),
 `correction.{scale,offset}`, `salinity_psu`, `allow_zero_cal`,
 `signals.{buzzer_hz,led_brightness,normal,blue,yellow,red,fault}` with `{buzzer,volume}` per state.
 
@@ -291,14 +311,18 @@ nobody links, the window closes after 10 minutes, the board is back on its Wi-Fi
 |---|---|
 | **DO (mg/L)**, **Saturation (%)**, **Temperature** | 5-minute medians. Temperature also opens the app's chart, but that shows only daily, weekly and monthly averages — the trend rows below show the curve. The device card on the home screen shows the temperature. |
 | **Level**, **Status** | at once on every change, e.g. "Red · 3.92 mg/L · sudden drop · silenced" |
-| **Acknowledge** | press and hold: the same as Acknowledge on the page |
+| **Acknowledge** | press and hold: the same as Acknowledge on the page. At Normal without a FAULT the board ignores it (the control is easy to fire while scrolling), so a stray tap changes and logs nothing |
 | **Suspend alert (min)** | 5–60 suspends the current alert, 0 resumes it. Outside an alert, in a FAULT, or when the level is now deeper than the app showed, the board refuses and the slider goes back |
 | **Last hour**, **Last 12 h**, **Last 24 h**, **Last 7 days** | the curve the app's charts cannot show (they draw only daily, weekly and monthly averages), as a row of bars: `▇▇▆▅▄▃▃▄▅▆▇… low 4.31 at 03:40 · high 7.02`. One bar per 2.5 min, 30 min, 1 h or 6 h, each the lowest DO in it, on a fixed scale from 0.5 mg/L below Red (`▁`) to 2.5 above Blue (`█`), so a dip into an alert looks like one and a calm day stays flat; `·` where there was no reading. Then the window's low with its time and its high. After a reboot they come back from the board's 5-minute log. |
 
-Pushes come for an alert that needs a person (Yellow, Red, repeats), a FAULT, a failed evening test and a lost
-plug, and once more when the board gets its connection back during a standing alarm. Their text is fixed by
-Espressif's cloud — "Node ‹id› has an alert!" (the id is under the device's settings, *Node Information*) — so open
-the app for the reason.
+Pushes come for what Config → **Phone app alerts** (`phone.alerts`) ticks: by default Yellow and Red when they are
+entered and every 10 / 2 min while they stand unacknowledged, a FAULT, a failed evening test and a lost plug; Blue
+can be added. Stepping down and recovering are shown, not pushed. The board pushes once more when it gets its
+connection back during a standing alert it would have pushed. Their text is fixed by Espressif's cloud — "Node ‹id›
+has an alert!" (the id is under the device's settings, *Node Information*) — so open the app for the reason.
+**Test alert** on Setup (or `cloud test`) sends one push for its own sake: the phone should buzz within a sample
+period and the app's status line reads "Test alert · …" for a minute. It is refused while the board is not online
+with the cloud.
 
 ### Unlinking
 

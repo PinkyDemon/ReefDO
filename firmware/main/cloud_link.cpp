@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
 
 #include "reefdo/gateway/cloud.hpp"
 
@@ -24,6 +25,7 @@
 #include "esp_rmaker_core.h"
 #include "esp_rmaker_standard_params.h"
 #include "esp_rmaker_standard_types.h"
+#include "esp_timer.h"
 #include "net.hpp"
 #include "nvs_flash.h"
 #include "platform.hpp"
@@ -92,8 +94,7 @@ void Apply(const cl::Updates& pU)
                                                                   : esp_rmaker_str(u.text.c_str()); // copied
         if(u.notify)
         {
-            esp_rmaker_param_update_and_notify(p, v);
-            ++sPushes;
+            if(esp_rmaker_param_update_and_notify(p, v) == ESP_RMAKER_OK) ++sPushes;
         }
         else
         {
@@ -127,29 +128,44 @@ esp_rmaker_error_t OnWrite(const esp_rmaker_device_t*, const esp_rmaker_param_wr
     return ESP_RMAKER_OK;
 }
 
+int64_t sPhaseSinceMs = 0; // when the cloud link last came up or went down, for the log
+
 void OnEvent(void*, esp_event_base_t, int32_t pId, void*)
 {
+    const int64_t now = esp_timer_get_time() / 1000;
+    const float sinceS = static_cast<float>(now - sPhaseSinceMs) / 1000.0f;
     if(pId == RMAKER_MQTT_EVENT_CONNECTED)
     {
         sPhase = Phase::Online;
+        sPhaseSinceMs = now;
+        sampler::ReportSystem(reefdo::app::SystemEvent::CloudUp, sinceS);
         ESP_LOGI(TAG, "phone app cloud connected");
     }
-    else if(pId == RMAKER_MQTT_EVENT_DISCONNECTED)
+    else if(pId == RMAKER_MQTT_EVENT_DISCONNECTED && sPhase == Phase::Online)
     {
         sPhase = Phase::Offline;
+        sPhaseSinceMs = now;
+        sampler::ReportSystem(reefdo::app::SystemEvent::CloudDown, sinceS);
         ESP_LOGW(TAG, "phone app cloud disconnected");
     }
 }
 
 void Declare(esp_rmaker_node_t* pNode);
 
+enum class Start : uint8_t
+{
+    NotLinked, // no device certificate: a link window is the only way on
+    Failed,    // linked, but the agent did not start (memory, the SDK): worth another try, never a new link
+    Ok
+};
+
 // Needs the device certificate (fctry): without it the node does not start and the board stays "not linked".
-bool TryStart()
+Start TryStart()
 {
     if(!HaveFactoryPartition())
     {
         ESP_LOGW(TAG, "no fctry partition (an older partition table): the phone app needs one USB flash");
-        return false;
+        return Start::NotLinked;
     }
     static esp_rmaker_node_t* sNode = nullptr; // once created, kept: a failed start retries the start only
     if(sNode == nullptr)
@@ -160,7 +176,7 @@ bool TryStart()
         if(sNode == nullptr)
         {
             ESP_LOGI(TAG, "not linked to a phone app");
-            return false;
+            return Start::NotLinked;
         }
         Declare(sNode);
     }
@@ -168,11 +184,11 @@ bool TryStart()
     if(esp_rmaker_start() != ESP_RMAKER_OK)
     {
         ESP_LOGE(TAG, "the phone app agent did not start");
-        return false;
+        return Start::Failed;
     }
     sRunning = true;
     ESP_LOGI(TAG, "linked: reporting to the phone app");
-    return true;
+    return Start::Ok;
 }
 
 // The device and its parameters, from the gateway's table; once per boot.
@@ -300,8 +316,13 @@ void WaitForNetwork()
 void Task(void*)
 {
     WaitForNetwork();
-    while(!TryStart())
+    for(Start s = TryStart(); s != Start::Ok; s = TryStart())
     {
+        if(s == Start::Failed) // linked already: a new link would waste one of the account's node IDs
+        {
+            vTaskDelay(pdMS_TO_TICKS(60'000));
+            continue;
+        }
         sPhase = Phase::NotLinked;
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY); // a link request (StartLink)
 #if CONFIG_BT_ENABLED
@@ -363,7 +384,13 @@ void OnSample(const reefdo::app::App& pApp, const reefdo::app::Clock& pClock,
 #if CONFIG_REEFDO_CLOUD
     if(!sRunning) return;
     const cl::Updates u = sAgent.Step(pApp, pClock, pNotes, sPhase == Phase::Online);
-    if(!u.empty() && xQueueSend(sUpdates, &u, 0) != pdTRUE) ESP_LOGW(TAG, "update for the app dropped: queue full");
+    if(u.empty()) return;
+    if(xQueueSend(sUpdates, &u, 0) != pdTRUE) // the task is stuck in a slow push: the oldest picture goes, not this one
+    {
+        cl::Updates old;
+        xQueueReceive(sUpdates, &old, 0);
+        if(xQueueSend(sUpdates, &u, 0) != pdTRUE) ESP_LOGW(TAG, "update for the app dropped: queue full");
+    }
 #else
     static_cast<void>(pApp);
     static_cast<void>(pClock);
@@ -440,12 +467,27 @@ bool Forget()
 const char* State()
 {
     static const char* const NAMES[] = {"off", "not linked", "linking", "offline", "online"};
+    static_assert(std::size(NAMES) == static_cast<std::size_t>(Phase::Online) + 1);
     return NAMES[static_cast<int>(sPhase.load())];
+}
+
+bool Linking()
+{
+    return sPhase == Phase::Linking;
 }
 
 uint32_t Pushes()
 {
     return sPushes;
+}
+
+uint32_t StackLeft()
+{
+#if CONFIG_REEFDO_CLOUD
+    return sTask != nullptr ? static_cast<uint32_t>(uxTaskGetStackHighWaterMark(sTask)) : UINT32_MAX;
+#else
+    return UINT32_MAX;
+#endif
 }
 
 } // namespace cloud_link

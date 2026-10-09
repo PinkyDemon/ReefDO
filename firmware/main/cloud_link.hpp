@@ -17,7 +17,9 @@ void OnSample(const reefdo::app::App& pApp, const reefdo::app::Clock& pClock,
               std::span<const reefdo::app::Notification> pNotes);
 // Opens a Bluetooth window for the ESP RainMaker Home app to link the board (and, optionally, set its Wi-Fi).
 reefdo::gateway::CloudLink StartLink();
-const char* State(); // "off", "not linked", "linking", "offline", "online"
+const char* State();  // "off", "not linked", "linking", "offline", "online"
+bool Linking();       // the Bluetooth window is open: a restart now would spoil the claim
+uint32_t StackLeft(); // the cloud task's smallest stack margin so far, bytes
 // Erases the device certificate (fctry) so that the board can be linked again, to another account; the caller
 // reboots. Costs one of the account's 20 lifetime node IDs at the next link. Console only.
 bool Forget();

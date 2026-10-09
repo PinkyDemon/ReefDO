@@ -87,9 +87,8 @@ tr:last-child td{border-bottom:0}
 canvas{display:block;width:100%;border-radius:8px}
 .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:8px}
 .legend i{display:inline-block;width:14px;height:3px;vertical-align:middle;margin-right:5px;border-radius:2px}
-.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
-.seg button{border:0;background:transparent;padding:6px 12px;cursor:pointer}
-.seg button.on{background:var(--text);color:var(--bg)}
+.seg.lg{border-radius:8px}
+.seg.lg button{padding:6px 12px}
 .readout{position:absolute;top:8px;right:8px;white-space:pre;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-family:var(--mono);font-size:12px;pointer-events:none;display:none}
 .form{display:grid;gap:10px 16px;grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
 label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted)}
@@ -103,7 +102,6 @@ td input:not([type=checkbox]),td select{padding:5px 7px;border:1px solid var(--l
 .ok{border-left:3px solid var(--green);padding:8px 12px;background:var(--green-bg);color:var(--text);border-radius:6px;font-size:14px}
 .prog{height:8px;background:var(--line);border-radius:999px;overflow:hidden;margin-top:10px}
 .prog i{display:block;height:100%;width:0;background:var(--blue);transition:width .3s}
-.spark{width:100%;height:70px}
 .toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:var(--text);color:var(--bg);padding:9px 16px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none}
 .toast.on{opacity:1}
 h2{font-size:16px;margin:18px 0 10px}
@@ -121,9 +119,9 @@ h2{font-size:16px;margin:18px 0 10px}
       <span id="wifi" title="WiFi">📶</span>
       <span id="tsrc" title="Time source">🕒</span>
       <span id="clock"></span>
-      <button class="btn" id="lock" style="padding:2px 8px" onclick="toggleLogin()" title="sign in for changes">🔒</button>
+      <button class="btn" id="lock" style="padding:2px 8px" onclick="toggleLogin()" title="sign in for changes; signed in: sign out">🔒</button>
     </div>
-    <div class="row" id="login" hidden><input type="password" id="login-pw" placeholder="password (default reefdo)" style="padding:6px 9px;border:1px solid var(--line);border-radius:8px;background:var(--soft);color:var(--text)"><button class="btn primary" onclick="signIn()">Sign in</button><span class="muted" style="font-size:13px" id="login-msg">user reef · needed for changes only</span></div>
+    <div class="row" id="login" hidden><input type="password" id="login-pw" placeholder="password (default reefdo)" onkeydown="if(event.key==='Enter')signIn()" style="padding:6px 9px;border:1px solid var(--line);border-radius:8px;background:var(--soft);color:var(--text)"><button class="btn primary" onclick="signIn()">Sign in</button><span class="muted" style="font-size:13px" id="login-msg">user reef · needed for changes only</span></div>
   </div>
   <nav id="nav">
     <a href="#status" class="on">Status</a><a href="#chart">Chart</a><a href="#events">Events</a>
@@ -191,6 +189,7 @@ h2{font-size:16px;margin:18px 0 10px}
       <b>WiFi</b><span id="sys-wifi">—</span> <b>time</b><span id="sys-time">—</span>
       <b>log A</b><span id="sys-loga">—</span> <b>log B / E / D</b><span id="sys-logb">—</span>
       <b>next seq</b><span class="mono" id="sys-seq">—</span> <b>phone app</b><span id="sys-cloud">—</span>
+      <b>heap</b><span id="sys-heap">—</span> <b>daily restart</b><span id="sys-restart">—</span>
     </div>
   </div>
 </section>
@@ -198,7 +197,7 @@ h2{font-size:16px;margin:18px 0 10px}
 <section id="chart">
   <div class="card">
     <div class="row" style="justify-content:space-between">
-      <div class="seg" id="range"><button data-r="1h">1 h</button><button data-r="6h">6 h</button><button data-r="12h">12 h</button><button class="on" data-r="24h">24 h</button><button data-r="7d">7 d</button><button data-r="90d">90 d</button></div>
+      <div class="seg lg" id="range"><button data-r="1h">1 h</button><button data-r="6h">6 h</button><button data-r="12h">12 h</button><button class="on" data-r="24h">24 h</button><button data-r="7d">7 d</button><button data-r="90d">90 d</button></div>
       <label class="c"><input type="checkbox" id="showtemp"> temperature</label>
     </div>
     <div class="chartwrap" style="margin-top:10px">
@@ -206,7 +205,7 @@ h2{font-size:16px;margin:18px 0 10px}
       <div class="readout" id="readout"></div>
     </div>
     <div class="legend" id="legend"></div>
-    <div class="note">1 h / 6 h: every 10-s sample, 12 h: every second, 24 h: every third one (tier A). 7 d / 90 d: 5-minute min–max band and average (tier B). Thresholds are drawn with their hysteresis bands.</div>
+    <div class="note">1 h / 6 h: every 10-s sample, 12 h: every second, 24 h: every third one (tier A). 7 d: every 5-minute bucket's min–max band and average, 90 d: every sixth bucket (tier B). Thresholds are drawn with their hysteresis bands.</div>
   </div>
 </section>
 
@@ -288,14 +287,25 @@ h2{font-size:16px;margin:18px 0 10px}
       <label class="f">window start <input type="time" data-k="boost.window.0"></label>
       <label class="f">window end <input type="time" data-k="boost.window.1"></label>
       <label class="f">target (mg/L) <input data-k="boost.target_mgl"></label>
+      <label class="f">hold the target for (s) <input data-k="boost.hold_s"></label>
     </div>
     <div class="row" style="margin-top:10px">
       <label class="c"><input type="checkbox" data-k="boost.enabled"> enabled</label>
     </div>
-    <div class="note">Runs the devices ticked <em>boost</em> above once a day inside the window, until DO reaches the target or the window ends. The ladder still acts on top of it.</div>
+    <div class="note">Runs the devices ticked <em>boost</em> above once a day inside the window, until DO has stayed at the target for the hold time or the window ends. A pump's first bubbles lift the reading at the probe long before the tank is there, so a dip below the target starts the hold over. The ladder still acts on top of it.</div>
   </div>
 
   <div class="grid">
+    <div class="card"><h3>Phone app alerts</h3>
+      <div class="row"><label class="c"><input type="checkbox" data-k="phone.alerts.blue"> Blue</label><label class="c"><input type="checkbox" data-k="phone.alerts.yellow"> Yellow</label><label class="c"><input type="checkbox" data-k="phone.alerts.red"> Red</label></div>
+      <div class="row" style="margin-top:6px"><label class="c"><input type="checkbox" data-k="phone.alerts.fault"> FAULT</label><label class="c"><input type="checkbox" data-k="phone.alerts.test_fail"> failed check</label><label class="c"><input type="checkbox" data-k="phone.alerts.device_lost"> lost plug</label></div>
+      <div class="note">What wakes the phone. A level pushes when it is entered; Yellow and Red (and FAULT) again every 10 / 2 min while they stand unacknowledged. The app shows everything either way. <em>Test alert</em> on Setup proves the way to the phone.</div>
+    </div>
+    <div class="card"><h3>Daily restart</h3>
+      <div class="form"><label class="f">time <input type="time" data-k="restart.time"></label></div>
+      <div class="row" style="margin-top:8px"><label class="c"><input type="checkbox" data-k="restart.daily"> restart once a day</label></div>
+      <div class="note">A safety net for whatever only a reboot cures. The board restarts at the first quiet sample within the hour after this time — Normal, no FAULT, no test, boost or maintenance running, no device out of order or switched by hand — and skips the day otherwise. Logged; NC devices run for the seconds of the reboot. Besides this, the board restarts by itself when its own web server has stopped answering for 5 minutes, once it is quiet.</div>
+    </div>
     <div class="card"><h3>Night</h3>
       <div class="form"><label class="f">start <input type="time" data-k="night.start"></label><label class="f">end <input type="time" data-k="night.end"></label></div>
       <div class="row" style="margin-top:8px"><label class="c"><input type="checkbox" data-k="night.lock"> night lock (hold ≥ Blue until morning once triggered)</label></div>
@@ -339,8 +349,8 @@ h2{font-size:16px;margin:18px 0 10px}
     <div class="form">
       <label class="f" title="Pattern to try">pattern <select id="bt-pattern"><option>chirp</option><option selected>beep</option><option>double</option><option>triple</option><option>continuous</option></select></label>
       <label class="f" title="0 = silent, 3 = loudest">volume <select id="bt-volume"><option>1</option><option selected>2</option><option>3</option></select></label>
-      <label class="f" title="Frequency of the tone">tone (Hz) <input id="bt-hz" value="2400"></label>
-      <label class="f" title="How long to play">seconds <input id="bt-s" value="4"></label>
+      <label class="f" title="Frequency of the tone">tone (Hz) <input id="bt-hz" type="number" min="200" max="8000" step="1" value="2400"></label>
+      <label class="f" title="How long to play">seconds <input id="bt-s" type="number" min="1" max="30" step="1" value="5"></label>
     </div>
     <div class="row" style="margin-top:10px"><button class="btn" onclick="buzzerTest()">Play</button><span class="note" style="margin:0">Plays even while the buzzer is muted. Pick what you like, then set it per state above.</span></div>
     <div class="row" style="margin-top:10px"><label class="c" title="Silences every alarm tone until switched back. Devices, LED and notifications keep working. For bench work only — a muted failsafe cannot wake you."><input type="checkbox" id="mute-toggle" onchange="setMute(this.checked)"> mute the buzzer (all alarms silent)</label></div>
@@ -412,9 +422,9 @@ h2{font-size:16px;margin:18px 0 10px}
     </div>
     <div class="card"><h3>Phone app</h3>
       <div class="kv" style="margin-bottom:8px"><b>state</b><span id="cloud-state">—</span></div>
-      <div class="row"><button class="btn" id="cloud-link-btn" onclick="cloudLink()">Link to the phone app</button></div>
+      <div class="row"><button class="btn" id="cloud-link-btn" onclick="cloudLink()">Link to the phone app</button><button class="btn" id="cloud-test-btn" onclick="cloudTest()" disabled title="A push to the phone for its own sake: it proves the way there">Test alert</button></div>
       <div class="kv" id="cloud-code" style="margin-top:8px" hidden><b>device</b><span class="mono" id="cloud-service"></span><b>code</b><span class="mono" id="cloud-pop"></span></div>
-      <div class="note">In the <b>ESP RainMaker Home</b> app: add device, pick the device named here and type the code; the board listens over Bluetooth for up to 10 minutes and is off Wi-Fi meanwhile (this page stops answering; the relays, the ladder and the buzzer carry on). The app then shows DO, the level and a chart, pushes alarms, and can acknowledge or suspend an alert — nothing else. The board never depends on it.</div>
+      <div class="note">In the <b>ESP RainMaker Home</b> app: add device, pick the device named here and type the code; the board listens over Bluetooth for up to 10 minutes and is off Wi-Fi meanwhile (this page stops answering; the relays, the ladder and the buzzer carry on). The app then shows DO, the level and the trend rows, pushes the alerts ticked on the Config page, and can acknowledge or suspend an alert — nothing else. The board never depends on it. <em>Test alert</em> sends one push now: the phone should buzz within a sample period, and the app's status reads "Test alert" for a minute.</div>
     </div>
     <div class="card"><h3>Web password</h3>
       <div class="form"><label class="f">user <input value="reef" disabled></label><label class="f">new password <input type="password" id="pw-new"></label></div>
@@ -424,7 +434,7 @@ h2{font-size:16px;margin:18px 0 10px}
     <div class="card"><h3>Time</h3>
       <div class="kv"><b>board clock</b><span id="time-state">—</span><b>this browser</b><span id="time-here">—</span></div>
       <div class="row" style="margin-top:8px"><button class="btn" onclick="pushTime()">Set from this browser now</button></div>
-      <div class="note">Pushed automatically when the board's clock is unknown. NTP takes over whenever the internet is reachable.</div>
+      <div class="note">Pushed automatically when the board's clock is unknown and you are signed in; a browser in another zone only says so here. NTP takes over whenever the internet is reachable.</div>
     </div>
   </div>
 </section>
@@ -440,11 +450,17 @@ const $=id=>document.getElementById(id);
 let AUTH=localStorage.getItem('auth')||'';
 async function api(p,o){ o=o||{}; if(AUTH){ o.headers=Object.assign({},o.headers,{Authorization:'Basic '+AUTH}); } const r=await fetch(p,o); if(r.status===401){ $('lock').textContent='🔒'; showLogin(AUTH?'wrong password':'sign in to make changes'); throw new Error('not signed in'); } if(!r.ok) throw new Error(r.status+' '+(await r.text()).slice(0,120)); return r; }
 function showLogin(msg){ $('login').hidden=false; $('login-msg').textContent=msg; $('login-pw').focus(); }
-function toggleLogin(){ $('login').hidden=!$('login').hidden; }
-async function signIn(){ AUTH=btoa('reef:'+$('login-pw').value); try{ await getJ('/api/auth'); localStorage.setItem('auth',AUTH); $('login').hidden=true; $('lock').textContent='🔓'; $('login-pw').value=''; toast('Signed in'); }catch(e){ AUTH=''; localStorage.removeItem('auth'); $('lock').textContent='🔒'; showLogin('wrong password'); } }
-const getJ=p=>api(p).then(r=>r.json());
+function signOut(){ AUTH=''; localStorage.removeItem('auth'); $('lock').textContent='🔒'; }
+function toggleLogin(){ if(AUTH){ signOut(); toast('Signed out'); return; } $('login').hidden=!$('login').hidden; }
+// Basic auth carries the UTF-8 bytes the board stores; btoa alone would encode Latin-1 and choke on anything else.
+const b64=s=>btoa(String.fromCharCode(...new TextEncoder().encode(s)));
+let pushedTime=false; // the board's clock set from this browser once per sign-in, only while it is unknown
+async function signIn(){ try{ AUTH=b64('reef:'+$('login-pw').value); await getJ('/api/auth'); localStorage.setItem('auth',AUTH); $('login').hidden=true; $('lock').textContent='🔓'; $('login-pw').value=''; pushedTime=false; toast('Signed in'); }catch(e){ signOut(); showLogin('wrong password'); } }
+const getJ=p=>api(p,{signal:AbortSignal.timeout(8000)}).then(r=>r.json()); // a read that hangs must not pile up
 const sendJ=(p,b,m='POST')=>api(p,{method:m,headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).then(r=>r.json());
 const sendForm=(p,b)=>api(p,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(b)}).then(r=>r.json());
+// One request with its outcome as a toast: pOk / pNo for the two answers, pForm for a form body.
+async function post(p,body,pOk,pNo,pForm){ try{ const r=await (pForm?sendForm:sendJ)(p,body); toast(r.ok?pOk:(pNo||'Refused: '+(r.message||''))); return r; }catch(e){ toast('Failed: '+e.message); return null; } }
 let tt; function toast(m){ const t=$('toast'); t.textContent=m; t.classList.add('on'); clearTimeout(tt); tt=setTimeout(()=>t.classList.remove('on'),2600); }
 function csv(text){ const lines=text.trim().split('\n'); if(lines.length<2) return []; const k=lines[0].split(','); return lines.slice(1).map(l=>{ const v=l.split(','); const o={}; k.forEach((x,i)=>o[x]=+v[i]); return o; }); }
 const pad=n=>String(n).padStart(2,'0');
@@ -463,7 +479,7 @@ function show(id){
   if(id==='chart') drawChart();
   if(id==='events') loadEvents();
   if(id==='test') loadTest();
-  if(id==='config') loadConfig();
+  if(id==='config'&&!configShown) loadConfig(); // once: a peek at Status must not throw unsaved edits away (Revert does)
   if(id==='setup') loadSetup();
   if(id==='export') $('lastseq').textContent=localStorage.getItem('lastseq')||'0';
 }
@@ -484,7 +500,7 @@ function devCard(d,i){
   const testing=ST&&ST.test.running&&ST.test.exclusive, m=d.manual;
   const opt=(v,label,tip)=>`<button class="${m===v?'on':''}" ${testing&&v!==null?'disabled':''} title="${testing&&v!==null?'An exclusive test is running':tip}" onclick="manual(${i+1},${v})">${label}</button>`;
   const man=d.pulse||out?'':`<span class="seg">${opt(null,'auto','Follow the ladder, windows, test and boost')}${opt(true,'on','On by hand until the next scheduled or triggered change')}${opt(false,'off','Off by hand until the next scheduled or triggered change')}</span>`;
-  return `<div class="dev ${out?'out':d.on?'on':''}"><div class="n"><span>${i+1} · ${d.name}</span><span class="tag ${d.trigger}">${d.trigger}</span></div>
+  return `<div class="dev ${out?'out':d.on?'on':''}"><div class="n"><span>${i+1} · ${esc(d.name)}</span><span class="tag ${d.trigger}">${d.trigger}</span></div>
     <div class="st"><span>${state}${d.pulse?' · pulse':''}</span><span>${outputText(d)}</span></div>
     <div class="st"><span>${out?'<b style="color:var(--red)">'+fmtLeft(d.suspend_s)+' left</b>'+(why?' · wanted: '+why:''):m===false?'off by hand'+(why?' · wanted: '+why:''):(why||'—')}</span></div>
     ${man?`<div class="st" style="justify-content:flex-start" title="Manual control: until the next scheduled or triggered change">${man}</div>`:''}
@@ -498,13 +514,23 @@ const SUS_MIN={};
 function devMaint(){
   if(!ST) return;
   $('devmaint').innerHTML=ST.devices.map((d,i)=>{ const n=i+1, out=d.suspend_s>0, m=SUS_MIN[n]||30;
-    return `<tr><td>${n}</td><td>${d.name}</td><td>${out?'<b style="color:var(--red)">out · '+fmtLeft(d.suspend_s)+' left</b>':(d.on?'on':'off')}</td>
+    return `<tr><td>${n}</td><td>${esc(d.name)}</td><td>${out?'<b style="color:var(--red)">out · '+fmtLeft(d.suspend_s)+' left</b>':(d.on?'on':'off')}</td>
       <td>${sel([5,10,15,30,60,120],m,`onchange="SUS_MIN[${n}]=+this.value"`)} min</td>
       <td>${out?`<button class="btn sm" onclick="suspendDev(${n},0)">Put back</button> <button class="btn sm" onclick="suspendDev(${n},SUS_MIN[${n}]||30)" title="Restart the timer">Extend</button>`:`<button class="btn sm" onclick="suspendDev(${n},SUS_MIN[${n}]||30)">Take out</button>`}</td></tr>`; }).join('');
 }
 async function suspendDev(n,min){ await cmd({suspend:{device:n,s:min*60}},min?'Device '+n+' out of order for '+min+' min':'Device '+n+' back in order'); }
+// A board that stops answering must not keep looking healthy: after two misses the page says so and greys out.
+let misses=0, lastAnswer=0, rebooting=false, devKey='';
+function offline(e){
+  $('do-probe').textContent='no answer: '+e.message;
+  if(++misses<2) return;
+  const what=rebooting?'REBOOTING · waiting for the board':'NO ANSWER'+(lastAnswer?' · last '+fmtTime(lastAnswer):'');
+  for(const id of ['levelpill','levelpill2']){ $(id).className='pill lv-fault'; $(id).innerHTML='<span class="dot"></span>'+what; }
+  document.querySelector('main').style.opacity='.55';
+}
 async function refresh(){
-  try{ ST=await getJ('/api/status'); }catch(e){ $('do-probe').textContent='no answer: '+e.message; return; }
+  try{ ST=await getJ('/api/status'); }catch(e){ offline(e); return; }
+  misses=0; rebooting=false; lastAnswer=Date.now()/1000; document.querySelector('main').style.opacity='';
   const s=ST, p=s.probe, l=s.ladder;
   $('fw').textContent='fw '+s.fw;
   pill($('levelpill'),s); pill($('levelpill2'),s);
@@ -524,8 +550,8 @@ async function refresh(){
   $('svc-window').textContent=s.test.window_start+' – '+s.test.window_end;
   $('svc-state').textContent=s.test.running?('running · device '+s.test.device+' · '+s.test.phase):'idle'+(s.test.inconclusive_alert?' · inconclusive streak':'')+(s.test.exclusive?'':' · checks off (not exclusive)');
   $('boost-state').textContent=s.boost.enabled?(s.boost.window_start+' – '+s.boost.window_end+' · to '+s.boost.target_mgl.toFixed(2)+' mg/L'+(s.boost.running?' · running':'')):'off';
-  $('devs').innerHTML=s.devices.map(devCard).join('');
-  devMaint();
+  const key=JSON.stringify(s.devices)+s.test.running+s.test.exclusive; // rebuilt only on a change: an open menu survives
+  if(key!==devKey){ devKey=key; $('devs').innerHTML=s.devices.map(devCard).join(''); devMaint(); testButtons(); }
   $('sys-up').textContent=fmtUp(s.uptime_s); $('sys-fw').textContent=s.fw+(WIFI&&WIFI.partition?' · '+WIFI.partition+' · '+WIFI.image:'');
   $('sys-time').textContent=s.clock_known?fmtTime(s.unix)+' (tz '+(s.tz/3600)+' h)':'unknown';
   $('sys-loga').textContent=s.log.a+' / '+s.log.a_capacity+' records';
@@ -536,8 +562,8 @@ async function refresh(){
   const maint=l.maintenance;
   document.querySelectorAll('.maint-only').forEach(b=>b.disabled=!maint);
   $('maintbtn').textContent=maint?'Leave maintenance ('+fmtLeft(l.maintenance_s)+' left)':'Enter maintenance';
-  if(!window._pushedTime && (!s.clock_known || (AUTH && s.tz!==tzHere()))){ window._pushedTime=true; pushTime(true); }
-  if(CFG){ $('nightlock').textContent=CFG.night.lock?'on · '+CFG.night.start+'–'+CFG.night.end:'off'; }
+  if(AUTH && !pushedTime && !s.clock_known){ pushedTime=true; pushTime(true); } // never a zone change behind the user's back
+  if(CFG){ $('nightlock').textContent=CFG.night.lock?'on · '+CFG.night.start+'–'+CFG.night.end:'off'; $('sys-restart').textContent=CFG.restart&&CFG.restart.daily?CFG.restart.time:'off'; }
 }
 async function refreshWifi(){
   try{ WIFI=await getJ('/api/sys'); }catch(e){ return; }
@@ -546,12 +572,13 @@ async function refreshWifi(){
   $('sys-wifi').textContent=w.connected?w.ssid+' · '+w.rssi+' dBm · '+w.ip:(w.ap?'setup AP reefdo-setup (192.168.4.1)':'connecting to '+w.ssid);
   $('simbadge').hidden=w.probe!=='sim';
   $('sys-cloud').textContent=(w.cloud||'off')+(w.cloud_pushes?' · '+w.cloud_pushes+' pushes':'');
-  $('cloud-state').textContent=w.cloud||'off'; $('cloud-link-btn').disabled=w.cloud!=='not linked'&&w.cloud!=='linking';
+  $('sys-heap').textContent=w.heap?Math.round(w.heap/1024)+' KB free · low '+Math.round(w.heap_min/1024)+' KB':'—';
+  $('cloud-state').textContent=w.cloud||'off'; $('cloud-link-btn').disabled=w.cloud!=='not linked'&&w.cloud!=='linking'; $('cloud-test-btn').disabled=w.cloud!=='online';
   $('mutebadge').hidden=!w.muted; $('mute-toggle').checked=!!w.muted;
-  $('cfgwarn').hidden=!w.config||w.config==='stored'; $('cfgwarn').textContent=w.config==='defaults'?'Factory defaults are active: no device is assigned yet. Set the devices on the Config page and Save.':'The stored configuration was '+w.config+' — the board runs on factory defaults until you Save a valid one.';}
+  $('cfgwarn').hidden=!w.config||w.config==='stored'; $('cfgwarn').textContent=w.config==='defaults'?'Factory defaults are active: no device is assigned yet. Set the devices on the Config page and Save.':w.config==='unsaved'?'The configuration was applied but could not be saved to flash: it is lost at the next reboot. Save it again.':'The stored configuration was '+w.config+' — the board runs on factory defaults until you Save a valid one.';}
 function ack(){ cmd({ack:true},'Acknowledged'); }
 function suspendAlerts(){ if(ST&&ST.ladder.alerts_suspended) cmd({suspend_alerts:{s:0}},'Alert resumed'); else cmd({suspend_alerts:{s:+$('susp-min').value*60,level:ST?ST.ladder.level:'red'}},'Alert suspended'); }
-async function setMute(pOn){ try{ const r=await sendForm('/api/mute',{muted:pOn?1:0}); toast(r.ok?(r.muted?'Buzzer muted':'Buzzer live'):'Rejected'); }catch(e){ toast('Failed: '+e.message); } refreshWifi(); }
+async function setMute(pOn){ await post('/api/mute',{muted:pOn?1:0},pOn?'Buzzer muted':'Buzzer live','Rejected',true); refreshWifi(); }
 async function toggleMaint(){ const on=!(ST&&ST.ladder.maintenance); await cmd({maintenance:on},on?'Maintenance mode for 30 min — buzzer muted':'Back to normal operation'); }
 async function pushTime(quiet){ try{ await sendJ('/api/cmd',{time:{unix:Math.floor(Date.now()/1000),tz:tzHere()}}); if(!quiet) toast('Board clock set from this browser'); refresh(); }catch(e){ if(!quiet) toast('Failed: '+e.message); } }
 
@@ -559,7 +586,7 @@ async function pushTime(quiet){ try{ await sendJ('/api/cmd',{time:{unix:Math.flo
 let range='24h';
 $('range').addEventListener('click',e=>{ if(e.target.dataset.r){ range=e.target.dataset.r; document.querySelectorAll('#range button').forEach(b=>b.classList.toggle('on',b===e.target)); drawChart(); }});
 $('showtemp').addEventListener('change',drawChart);
-window.addEventListener('resize',()=>{ if($('chart').classList.contains('on')) drawChart(); });
+let resizeTimer; window.addEventListener('resize',()=>{ clearTimeout(resizeTimer); resizeTimer=setTimeout(()=>{ if($('chart').classList.contains('on')) drawChart(); },150); });
 // Each draw has a number; after every wait a draw that is no longer the newest stops, and the newest cancels the
 // older one's download, so a slow 24 h load cannot paint its markers over the 1 h chart.
 const cache={}; // range → {unix, data}: switching back within a minute does not load again
@@ -575,6 +602,7 @@ async function drawChart(fresh){
 async function drawChartNow(gen,signal,fresh){
   if(!CFG) await loadConfig(true);
   if(gen!==chartGen) return;
+  if(!CFG){ toast('No configuration from the board yet: no chart'); return; }
   if(!ST||!ST.clock_known){ toast('The board has no clock yet: no chart'); return; }
   const days=range==='1h'?1/24:range==='6h'?0.25:range==='12h'?0.5:range==='24h'?1:range==='7d'?7:90;
   const now=ST.unix, t0=now-Math.round(days*86400);
@@ -671,7 +699,10 @@ async function drawChartNow(gen,signal,fresh){
 }
 
 // ---------- events ----------
-const TYPE={3:'Boot',4:'Fault',5:'Config',6:'Correction',7:'Command',8:'TimeSync',9:'Daily'};
+const TYPE={4:'Fault',5:'Config'}; // the others have their own lines in describe()
+const RESET=['unknown','power on','reset pin','software','panic','interrupt watchdog','task watchdog','watchdog','deep sleep','brownout','SDIO','USB','JTAG','eFuse','power glitch','CPU lockup'];
+const SYS_EV=['','Wi-Fi lost','Wi-Fi back','Phone app cloud down','Phone app cloud up','Heap','Web server not answering','Restart'];
+const RESTART_WHY=['by command','daily restart','the web server stopped answering','firmware update'];
 const LADDER_EV=['Level','Effective level (1.0)','FAULT','FAULT cleared','Ack','Pulse off','Heat on','Heat off','Ack (automatic, by day)','Sudden drop','Sudden drop over','Alert suspended','Alert resumed'];
 const RESUME_WHY=['its time ran out','the level went deeper','FAULT','the alert is over','by hand'];
 const SVC_EV=['Test start','Device start','Device end','Test end','Test skipped','Test FAIL','Test fail cleared','Test inconclusive'];
@@ -695,14 +726,18 @@ function describe(r){
     if(t===2) return [o===2?'fail':'test', 'Device end · '+dev(d), OUTCOME[o]+' · '+r.f0.toFixed(1)+' %'+highDo(r)];
     if(t===4) return ['test','Test skipped',SKIP[sk]||''];
     if(t===5) return ['fail','Test FAIL · '+dev(d), r.f0.toFixed(1)+' %'];
-    return ['test', SVC_EV[t]||('test '+t), t===1?dev(d):''];
+    return ['test', SVC_EV[t]||('test '+t), t===1||t===6?dev(d):''];
   }
   if(r.type===11) return ['boost', BOOST_EV[r.aux&255]||('boost '+(r.aux&255)), r.f0.toFixed(2)+' of '+r.f1.toFixed(2)+' mg/L'];
   if(r.type===6) return ['system','Correction '+(r.aux===0?'(boot)':r.aux===1?'(daily)':'(changed)'), '×'+r.f0.toFixed(3)+' '+(r.f1>=0?'+':'')+r.f1.toFixed(2)];
   if(r.type===9) return ['system','Daily summary','min '+r.f0.toFixed(2)+' · avg '+r.f1.toFixed(2)+' · max '+r.f2.toFixed(2)+' mg/L · temp '+r.f3.toFixed(1)];
   if(r.type===8) return ['system','TimeSync','offset '+r.f0.toFixed(0)+' s'];
-  if(r.type===3) return ['system','Boot','reason '+r.aux];
+  if(r.type===3) return ['system','Boot',RESET[r.aux]||('reason '+r.aux)];
+  if(r.type===12){ const a=r.aux;
+    const v=a===1?'after '+fmtUp(r.f0)+' · reason '+r.f1.toFixed(0):a===2||a===4?'down for '+fmtUp(r.f0):a===3?'after '+fmtUp(r.f0):a===5?r.f0.toFixed(0)+' KB free · low '+r.f1.toFixed(0)+' KB · largest block '+r.f2.toFixed(0)+' KB':a===6?r.f0.toFixed(0)+' in a row':a===7?RESTART_WHY[r.f0|0]||'':'';
+    return [a===1||a===3||a===6?'fail':'system', SYS_EV[a]||('system '+a), v]; }
   if(r.type===7){ const t=r.aux&255, d=(r.aux>>8)&255;
+    if(t===12) return ['system','Test alert to the phone app',''];
     if(t===4) return ['fail','Out of order · '+dev(d), 'for '+Math.round(r.f0/60)+' min'];
     if(t===5) return ['system','Back in order · '+dev(d), ['by command','time ran out'][r.f1|0]||''];
     if(t===6) return ['system','Manual on · '+dev(d), ''];
@@ -712,7 +747,8 @@ function describe(r){
     if(t===10) return ['system','Plug back · '+dev(d), ''];
     if(t===11) return ['system','Test failure cleared by hand · '+dev(d), ''];
     if(t===2) return ['system','Maintenance off', ['by command','its 30 min ran out'][r.f1|0]||''];
-    return ['system',t===1?'Maintenance on':'Command air calibration',''];
+    if(t===3) return [r.f0?'fail':'system','Air calibration', ['sent','refused: not in maintenance','the probe did not acknowledge'][r.f0|0]||''];
+    return ['system',t===1?'Maintenance on':'Command '+t,''];
   }
   return ['system',TYPE[r.type]||('type '+r.type),''];
 }
@@ -723,7 +759,8 @@ let eventsLoading=null;
 function loadEventsData(){
   if(!eventsLoading) eventsLoading=(async()=>{
     const since=EVENTS.length?EVENTS[EVENTS.length-1].seq+1:0;
-    try{ const more=csv(await (await api('/api/events?since='+since)).text()); if(more.length) EVENTS=EVENTS.concat(more); }catch(e){ toast('Events failed: '+e.message); }
+    try{ const more=csv(await (await api('/api/events?since='+since)).text()).filter(r=>r.seq>=since); // a rotating ring may repeat a row
+      if(more.length) EVENTS=EVENTS.concat(more); }catch(e){ toast('Events failed: '+e.message); }
   })().finally(()=>{ eventsLoading=null; });
   return eventsLoading;
 }
@@ -732,20 +769,21 @@ async function loadEvents(){
   await loadEventsData();
   const col={normal:'--green',blue:'--blue',yellow:'--yellow',red:'--red',fault:'--purple',fail:'--red',test:'--white',boost:'--cyan',system:'--muted'};
   $('evcount').textContent=EVENTS.length+' events';
-  document.querySelector('#evtable tbody').innerHTML=EVENTS.slice().reverse().map(r=>{ const [k,m,v]=describe(r); const t=r.ts?fmtTime(r.ts):'boot+'+r.uptime_s+' s'; return `<tr><td class="mono muted" style="white-space:nowrap">${t}</td><td><span class="ev" style="background:var(${col[k]||'--muted'})"></span>${m}</td><td class="muted">${v}</td></tr>`; }).join('');
+  document.querySelector('#evtable tbody').innerHTML=EVENTS.slice().reverse().map(r=>{ const [k,m,v]=describe(r); const t=r.ts?fmtTime(r.ts):'boot+'+r.uptime_s+' s'; return `<tr><td class="mono muted" style="white-space:nowrap">${t}</td><td><span class="ev" style="background:var(${col[k]||'--muted'})"></span>${esc(m)}</td><td class="muted">${esc(v)}</td></tr>`; }).join('');
 }
 
 // ---------- self test ----------
 async function loadTest(){
   let s; try{ s=await getJ('/api/test'); }catch(e){ toast('Test failed: '+e.message); return; }
   if(!CFG) await loadConfig(true);
+  if(!CFG){ toast('No configuration from the board yet'); return; }
   $('svc-win2').textContent=(ST?ST.test.window_start+' – '+ST.test.window_end:'')+(s.running?' · running':'');
   $('svc-note').textContent='Starts at the first sample inside the window with at least '+CFG.test.min_headroom_pct+' % headroom from 100 %; otherwise at the end, inconclusive.'+(s.no_fail_above_mgl>0?' A device that misses its response after starting at or above '+s.no_fail_above_mgl.toFixed(2)+' mg/L is unchecked, not FAIL.':'')+(s.inconclusive_alert?' Inconclusive '+s.inconclusive_streak+' evenings running.':'');
   $('svc-dur').textContent='a run takes '+Math.round(s.run_duration_s/60)+' min';
-  document.querySelector('#svctable tbody').innerHTML=s.devices.map((d,i)=>d.test_s||d.fail_active?`<tr><td>${i+1} · ${d.name}</td><td>${d.last_response.toFixed(1)} %</td><td style="color:var(${d.last_outcome==='fail'?'--red':d.last_outcome==='pass'?'--green':'--muted'})">${d.last_outcome}${d.fail_active?' · FAIL active':''}</td><td>${d.fail_active?`<button class="btn sm" onclick="clearFail(${i+1}).then(loadTest)">Clear</button>`:''}</td></tr>`:'').join('')||'<tr><td class="muted">no device has test_s &gt; 0</td></tr>';
+  document.querySelector('#svctable tbody').innerHTML=s.devices.map((d,i)=>d.test_s||d.fail_active?`<tr><td>${i+1} · ${esc(d.name)}</td><td>${d.last_response.toFixed(1)} %</td><td style="color:var(${d.last_outcome==='fail'?'--red':d.last_outcome==='pass'?'--green':'--muted'})">${d.last_outcome}${d.fail_active?' · FAIL active':''}</td><td>${d.fail_active?`<button class="btn sm" onclick="clearFail(${i+1}).then(loadTest)">Clear</button>`:''}</td></tr>`:'').join('')||'<tr><td class="muted">no device has test_s &gt; 0</td></tr>';
   $('svc-last').textContent=s.devices.some(d=>d.fail_active)?'FAIL active':s.devices.some(d=>d.last_outcome==='pass')?'pass':'—';
-  if(!EVENTS.length) await loadEvents();
-  document.querySelector('#svchist tbody').innerHTML=EVENTS.filter(r=>r.type===10).slice().reverse().slice(0,60).map(r=>{ const t=r.aux&255,d=(r.aux>>8)&255,o=(r.aux>>16)&255; return `<tr><td class="mono muted">${r.ts?fmtTime(r.ts):'boot+'+r.uptime_s+' s'}</td><td>${SVC_EV[t]}</td><td>${[1,2,5,6].includes(t)?(d+1)+' · '+(CFG.devices[d+1]?CFG.devices[d+1].name:''):''}</td><td>${t===2||t===5?r.f0.toFixed(1)+' %':''}</td><td>${t===2?OUTCOME[o]+highDo(r):t===4?SKIP[(r.aux>>24)&255]||'':''}</td></tr>`; }).join('');
+  await loadEventsData();
+  document.querySelector('#svchist tbody').innerHTML=EVENTS.filter(r=>r.type===10).slice().reverse().slice(0,60).map(r=>{ const t=r.aux&255,d=(r.aux>>8)&255,o=(r.aux>>16)&255; return `<tr><td class="mono muted">${r.ts?fmtTime(r.ts):'boot+'+r.uptime_s+' s'}</td><td>${SVC_EV[t]}</td><td>${[1,2,5,6].includes(t)?(d+1)+' · '+esc(CFG.devices[d+1]?CFG.devices[d+1].name:''):''}</td><td>${t===2||t===5?r.f0.toFixed(1)+' %':''}</td><td>${t===2?OUTCOME[o]+highDo(r):t===4?SKIP[(r.aux>>24)&255]||'':''}</td></tr>`; }).join('');
 }
 
 // ---------- tooltips: one sentence per setting, keyed by config path (devices.N → devices.*) ----------
@@ -780,7 +818,16 @@ const TIPS={
  'boost.enabled':'Once a day, inside the window, run the boost devices until DO reaches the target or the window ends. Pauses for a test run or maintenance.',
  'boost.window.0':'Start of the daily boost window (local time). By default it follows the test window, so the check runs on a quiet tank first.',
  'boost.window.1':'End of the boost window; the run stops here even if the target was not reached.',
- 'boost.target_mgl':'DO (mg/L) at which the boost stops early.',
+ 'boost.target_mgl':'DO (mg/L) the boost aims for.',
+ 'boost.hold_s':'The boost stops once DO has stayed at or above the target for this long (0..3600 s). A pump\'s first bubbles lift the reading at the probe long before the tank follows; a dip below the target starts the hold over. 0 = stop at the first reading at the target.',
+ 'phone.alerts.blue':'Push a Blue alert to the phone when it is entered. Blue is a device level: by default the tank handles it alone.',
+ 'phone.alerts.yellow':'Push a Yellow alert to the phone when it is entered, and every 10 min while it stands unacknowledged.',
+ 'phone.alerts.red':'Push a Red alert to the phone when it is entered, and every 2 min while it stands unacknowledged.',
+ 'phone.alerts.fault':'Push a FAULT (the probe not answering) to the phone, repeating like Red.',
+ 'phone.alerts.test_fail':'Push a device\'s failed evening check to the phone.',
+ 'phone.alerts.device_lost':'Push a Tuya plug that stopped answering to the phone.',
+ 'restart.daily':'Restart the board once a day at the first quiet sample within the hour after the time: a safety net for whatever only a reboot cures. Off by default.',
+ 'restart.time':'Local time of the daily restart. Pick a quiet hour, away from the test and boost windows; the restart waits up to an hour for a quiet sample and skips the day otherwise.',
  'night.start':'Start of the night hours (for the night lock and the test window rule).',
  'night.end':'End of the night hours.',
  'night.lock':'Once an alert triggers at night, hold at least Blue until morning even if DO recovers — the devices keep running through the risky hours.',
@@ -814,12 +861,15 @@ function applyTips(){
 const get=(o,p)=>p.split('.').reduce((a,k)=>a==null?undefined:a[k],o);
 const set=(o,p,v)=>{ const ks=p.split('.'); let a=o; ks.slice(0,-1).forEach(k=>{ if(a[k]==null) a[k]={}; a=a[k]; }); a[ks[ks.length-1]]=v; };
 const sel=(opts,v,attrs='')=>`<select ${attrs}>${opts.map(o=>`<option ${o===v?'selected':''}>${o}</option>`).join('')}</select>`;
+let configShown=false;
 async function loadConfig(quiet){
   try{ CFG=await getJ('/api/config'); }catch(e){ if(!quiet) toast('Config failed: '+e.message); return; }
   if(quiet) return;
   const c=CFG;
   $('lvcfg').innerHTML=['blue','yellow','red'].map(k=>{ const l=c.levels[k]; return `<tr><td><span class="tag ${k}">${k}</span></td><td><input class="mono" data-k="levels.${k}.mgl" size="5"></td><td><input class="mono" data-k="levels.${k}.hysteresis" size="5"></td><td><input class="mono" data-k="levels.${k}.dwell_s" size="4"></td><td class="mono">${(l.mgl-l.hysteresis).toFixed(2)}</td><td class="mono">${(l.mgl+l.hysteresis).toFixed(2)}</td></tr>`; }).join('');
-  await loadSlots();
+  // Without the output types the device table cannot be edited: a stub would save every output as "none".
+  try{ await loadSlots(); }catch(e){ const m=$('cfgmsg'); m.className='warn'; m.textContent='The output types did not load ('+e.message+'): reload the page before editing devices.'; return; }
+  configShown=true;
   $('devcfg').innerHTML=devNums(c).map(n=>{ const d=c.devices[n]; return `<tr><td>${n}</td><td><input data-k="devices.${n}.name" size="14"></td><td id="slot-${n}" class="slotcell">${slotEditor(n,d.slot||{type:'none'})}</td><td>${sel(['none','blue','yellow','red'],d.trigger,`data-k="devices.${n}.trigger"`)}</td><td>${sel(['on','pulse_off'],d.mode,`data-k="devices.${n}.mode"`)}</td><td><input type="checkbox" data-k="devices.${n}.ack_silences"></td><td><input class="mono" data-k="devices.${n}.test_s" size="4"></td><td><input class="mono" data-k="devices.${n}.min_response_pct" size="4"></td><td><input type="checkbox" data-k="devices.${n}.boost"></td><td><input class="mono" data-win="${n}" size="18" placeholder="—" value="${(d.windows||[]).map(w=>w[0]+'-'+w[1]).join(', ')}"></td></tr>`; }).join('');
 
   $('sigcfg').innerHTML=['normal','blue','yellow','red','fault'].map(k=>{ const s=c.signals[k]; const silent=k==='normal'; return `<tr><td><span class="tag ${k==='normal'?'none':k}">${k}</span></td><td>${silent?'<span class="muted">off</span>':sel(['off','chirp','beep','double','triple','continuous'],s.buzzer,`data-k="signals.${k}.buzzer"`)}</td><td>${silent?'':sel([0,1,2,3],s.volume,`data-k="signals.${k}.volume"`)}</td></tr>`; }).join('');
@@ -834,7 +884,7 @@ const devNums=c=>Object.keys(c.devices).map(Number).sort((a,b)=>a-b);
 
 // ---------- output editors, built from the slot types' JSON Schema (GET /api/slots) ----------
 let SLOTS=null;
-async function loadSlots(){ if(SLOTS) return; try{ SLOTS=await getJ('/api/slots'); }catch(e){ SLOTS={none:{title:'no output',properties:{}}}; toast('Slot types failed: '+e.message); } }
+async function loadSlots(){ if(!SLOTS) SLOTS=await getJ('/api/slots'); }
 const esc=s=>String(s??'').replace(/[&<>"]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]));
 // One control per property: a list for names and small ranges, a number or a text box otherwise.
 function slotField(n,k,p,v){
@@ -852,7 +902,7 @@ function slotEditor(n,s){
   const type=`<select data-slottype="${n}" onchange="slotType(${n},this.value)" title="${esc(tipFor('devices.*.slot'))}">${Object.keys(SLOTS).map(t=>`<option value="${t}" ${t===s.type?'selected':''}>${esc(SLOTS[t].title)}</option>`).join('')}</select>`;
   return type+Object.entries(sch.properties||{}).map(([k,p])=>slotField(n,k,p,s[k]??p.default)).join('');
 }
-function slotType(n,t){ $('slot-'+n).innerHTML=slotEditor(n,{type:t}); }
+function slotType(n,t){ const saved=(CFG.devices[n]||{}).slot||{}; $('slot-'+n).innerHTML=slotEditor(n,saved.type===t?saved:{type:t}); } // back to the saved type: its saved parameters
 function collectSlot(n){
   const s={type:document.querySelector(`[data-slottype="${n}"]`).value};
   document.querySelectorAll(`[data-slot="${n}"]`).forEach(el=>{ s[el.dataset.f]=el.hasAttribute('data-int')?Number(el.value):el.value; });
@@ -874,8 +924,7 @@ function collectConfig(){
   document.querySelectorAll('#config [data-k]').forEach(el=>{
     const k=el.dataset.k; const old=get(CFG,k);
     let v=el.type==='checkbox'?el.checked:el.value;
-    if(typeof old==='number'){ v=Number(v); if(Number.isNaN(v)) v=old; }
-    if(el.tagName==='SELECT' && typeof old==='number') v=Number(v);
+    if(typeof old==='number'){ const n=Number(v); if(String(v).trim()===''||Number.isNaN(n)) throw new Error(k+': "'+v+'" is not a number'); v=n; }
     set(c,k,v);
   });
   devNums(c).forEach(n=>{ c.devices[n].slot=collectSlot(n); });
@@ -889,41 +938,55 @@ async function saveConfig(){
   }catch(e){ toast('Failed: '+e.message); }
 }
 function downloadConfig(){ let c; try{ c=collectConfig(); }catch(e){ toast(e.message); return; } const a=document.createElement('a'); a.href='data:application/json,'+encodeURIComponent(JSON.stringify(c,null,2)); a.download='reefdo-config.json'; a.click(); }
-async function buzzerTest(){ try{ const r=await sendForm('/api/buzzer-test',{pattern:$('bt-pattern').value,volume:$('bt-volume').value,hz:$('bt-hz').value,s:$('bt-s').value}); toast(r.ok?'Playing':'Rejected'); }catch(e){ toast('Failed: '+e.message); } }
+async function buzzerTest(){ await post('/api/buzzer-test',{pattern:$('bt-pattern').value,volume:$('bt-volume').value,hz:$('bt-hz').value,s:$('bt-s').value},'Playing','Rejected',true); }
 
 // ---------- maintenance ----------
-function testButtons(){ if(!ST) return; $('devtest').innerHTML=ST.devices.map((d,i)=>`<button class="btn" onclick="deviceTest(${i+1})">${i+1} · ${d.name}</button>`).join(''); }
-// The device test is the manual switch: on for 5 s, then automatic again.
-async function deviceTest(n){ try{ const r=await sendJ('/api/cmd',{manual:{device:n,on:true}}); if(!r.ok){ toast('Refused: '+r.message); return; } toast('Device '+n+' on for 5 s'); refresh(); setTimeout(()=>sendJ('/api/cmd',{manual:{device:n,on:null}}).then(refresh),5000); }catch(e){ toast('Failed: '+e.message); } }
-async function ota(){
+function testButtons(){ if(!ST) return; $('devtest').innerHTML=ST.devices.map((d,i)=>`<button class="btn" ${d.suspend_s>0?'disabled title="out of order: nothing would switch"':''} onclick="deviceTest(${i+1})">${i+1} · ${esc(d.name)}</button>`).join(''); }
+// The device test is the manual switch: on for 5 s, then automatic again. A failure to hand it back must be heard.
+async function deviceTest(n){ try{ const r=await sendJ('/api/cmd',{manual:{device:n,on:true}}); if(!r.ok){ toast('Refused: '+r.message); return; } toast('Device '+n+' on for 5 s'); refresh(); setTimeout(()=>sendJ('/api/cmd',{manual:{device:n,on:null}}).then(refresh).catch(e=>toast('Device '+n+' is still ON by hand: '+e.message+' — set it to auto on its card')),5000); }catch(e){ toast('Failed: '+e.message); } }
+// The image goes up as one request; XMLHttpRequest is the one API that reports upload progress.
+function ota(){
   const f=$('otafile').files[0]; if(!f){ toast('Choose a .bin first'); return; }
-  const el=$('otaprog'); el.style.width='30%';
-  try{ const j=await api('/api/ota',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:f}).then(r=>r.json()); el.style.width='100%';
-    toast(j.ok?'Image written to '+j.partition+' · rebooting':'OTA failed: '+(j.message||'refused')); }
-  catch(e){ el.style.width='0'; toast('OTA failed: '+e.message); }
+  const el=$('otaprog'); el.style.width='2%';
+  const x=new XMLHttpRequest(); x.open('POST','/api/ota'); if(AUTH) x.setRequestHeader('Authorization','Basic '+AUTH); x.setRequestHeader('Content-Type','application/octet-stream');
+  x.upload.onprogress=ev=>{ if(ev.lengthComputable) el.style.width=Math.max(2,Math.round(ev.loaded/ev.total*95))+'%'; };
+  x.onerror=()=>{ el.style.width='0'; toast('OTA failed: the connection broke'); };
+  x.onload=()=>{ let j={}; try{ j=JSON.parse(x.responseText); }catch(e){} if(x.status===401){ el.style.width='0'; showLogin('sign in to update'); return; }
+    if(x.status===200&&j.ok){ el.style.width='100%'; rebooting=true; toast('Image written to '+j.partition+' · rebooting, the page waits for the board'); } else { el.style.width='0'; toast('OTA failed: '+(j.message||x.responseText.slice(0,80)||x.status)); } };
+  x.send(f);
 }
 
 // ---------- export ----------
-function exportSince(){ const since=localStorage.getItem('lastseq')||0; if(ST) localStorage.setItem('lastseq',ST.next_seq); $('lastseq').textContent=localStorage.getItem('lastseq'); location.href='/api/export.csv?since='+since; }
-function exportAll(){ if(ST) localStorage.setItem('lastseq',ST.next_seq); $('lastseq').textContent=localStorage.getItem('lastseq'); location.href='/api/export.csv?since=0'; }
+// The export is fetched, then saved: the "since" mark moves only once the records are really in this browser.
+async function exportCsv(since){
+  const next=ST?ST.next_seq:null; toast('Exporting…');
+  try{ const r=await api('/api/export.csv?since='+since); const blob=await r.blob(); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='reefdo.csv'; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),60000);
+    if(next!=null){ localStorage.setItem('lastseq',next); $('lastseq').textContent=next; } toast('Exported'); }
+  catch(e){ toast('Export failed: '+e.message); }
+}
+function exportSince(){ exportCsv(localStorage.getItem('lastseq')||0); }
+function exportAll(){ exportCsv(0); }
 
 // ---------- setup ----------
 async function loadSetup(){
   await refreshWifi(); const w=WIFI||{};
   $('wifi-state').textContent=w.connected?('connected to '+w.ssid+' · '+w.ip+' · '+w.rssi+' dBm'):(w.ap?'setup AP up · not connected':'connecting to '+w.ssid);
   $('wifi-ssid').value=w.ssid||'';
-  $('time-state').textContent=ST&&ST.clock_known?fmtTime(ST.unix)+' · tz '+(ST.tz/3600)+' h'+(w.ntp?' · NTP':''):'unknown';
+  $('time-state').textContent=ST&&ST.clock_known?fmtTime(ST.unix)+' · tz '+(ST.tz/3600)+' h'+(w.ntp?' · NTP':'')+(ST.tz!==tzHere()?' · another zone than this browser':''):'unknown';
   $('time-here').textContent=new Date().toLocaleString('en-GB')+' · tz '+(tzHere()/3600)+' h';
 }
-async function cloudLink(){ try{ const r=await sendJ('/api/cloud-link',{}); if(r.ok){ $('cloud-service').textContent=r.service; $('cloud-pop').textContent=r.pop; $('cloud-code').hidden=false; } toast(r.ok?'Link window open: 10 minutes':'Not now: '+r.message); refreshWifi(); }catch(e){ toast('Failed: '+e.message); } }
-async function saveWifi(){ try{ const r=await sendForm('/api/wifi',{ssid:$('wifi-ssid').value,pass:$('wifi-pass').value}); toast(r.ok?'Saved; connecting':'Rejected'); }catch(e){ toast('Failed: '+e.message); } }
-async function savePassword(){ try{ const pw=$('pw-new').value; const r=await sendForm('/api/passwd',{password:pw}); if(r.ok){ AUTH=btoa('reef:'+(pw||'reefdo')); localStorage.setItem('auth',AUTH); } toast(r.ok?'Password changed':'Rejected (max 32)'); }catch(e){ toast('Failed: '+e.message); } }
+async function cloudLink(){ const r=await post('/api/cloud-link',{},'Link window open: 10 minutes'); if(r&&r.ok){ $('cloud-service').textContent=r.service; $('cloud-pop').textContent=r.pop; $('cloud-code').hidden=false; } refreshWifi(); }
+async function cloudTest(){ await cmd({test_alert:true},'Test alert sent: the phone should buzz within '+(CFG?CFG.sample_period_s:10)+' s'); }
+async function saveWifi(){ const r=await post('/api/wifi',{ssid:$('wifi-ssid').value,pass:$('wifi-pass').value},'Saved; connecting','Rejected',true); if(r&&r.ok) $('wifi-pass').value=''; }
+async function savePassword(){ const pw=$('pw-new').value; let auth; try{ auth=b64('reef:'+(pw||'reefdo')); }catch(e){ toast('Rejected: '+e.message); return; }
+  const r=await post('/api/passwd',{password:pw},'Password changed','Rejected (max 32)',true); if(r&&r.ok){ AUTH=auth; localStorage.setItem('auth',AUTH); $('pw-new').value=''; } }
 
 // ---------- start ----------
-(async()=>{ if(AUTH){ try{ await getJ('/api/auth'); $('lock').textContent='🔓'; }catch(e){ AUTH=''; localStorage.removeItem('auth'); } } await loadConfig(true); await refresh(); await refreshWifi(); testButtons(); show((location.hash||'#status').slice(1)); })();
-setInterval(async()=>{ await refresh(); testButtons(); },5000);
+// The periodic reads chain on their own completion: a slow board gets one request at a time, not a pile.
+async function every(ms,fn){ try{ await fn(); }catch(e){} setTimeout(()=>every(ms,fn),ms); }
+(async()=>{ if(AUTH){ try{ await getJ('/api/auth'); $('lock').textContent='🔓'; }catch(e){ if(String(e.message).includes('signed')) signOut(); } } await loadConfig(true); await refresh(); await refreshWifi(); show((location.hash||'#status').slice(1));
+  setTimeout(()=>every(5000,refresh),5000); setTimeout(()=>every(15000,refreshWifi),15000); })();
 setInterval(()=>{ if($('chart').classList.contains('on')&&!chartLoading) drawChart(true); },30000); // fresh data; never cuts a load short
-setInterval(refreshWifi,15000);
 </script>
 </body>
 </html>

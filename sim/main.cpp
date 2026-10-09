@@ -98,9 +98,9 @@ int32_t LocalOffsetS()
 
 const char* NotifyName(reefdo::app::NotifyKind pK)
 {
-    static const char* const NAMES[] = {"level",     "fault",     "fault cleared",
-                                        "recovered", "test FAIL", "test inconclusive",
-                                        "boot",      "plug lost", "plug back"};
+    static const char* const NAMES[] = {
+        "level", "fault",     "fault cleared", "recovered", "test FAIL", "test inconclusive",
+        "boot",  "plug lost", "plug back",     "test alert"};
     return NAMES[static_cast<int>(pK)];
 }
 
@@ -148,7 +148,7 @@ public:
     }
     const std::string& Password() const { return mPassword; }
     std::string configState = "defaults";
-    std::string cloudState = "online";
+    const bool* cloudUp = nullptr; // the fake cloud link, as the controls switch it (World::cloudUp)
     uint32_t cloudPushes = 0;
 
     gw::SysInfo Sys() override
@@ -163,7 +163,7 @@ public:
         s.probe.assign("sim");
         s.muted = mMuted;
         s.config.assign(configState);
-        s.cloud.assign(cloudState);
+        s.cloud.assign(cloudUp != nullptr && *cloudUp ? "online" : "offline"); // as the board reports it
         s.cloudPushes = cloudPushes;
         return s;
     }
@@ -329,6 +329,7 @@ int main(int pArgc, char** pArgv)
     platform.configState = configState;
     sim::World world{tank, probe, app, clock};
     world.speed = opt->speed;
+    platform.cloudUp = &world.cloudUp;
 
     // The fake cloud: the gateway's cloud agent, and what a phone app would show from its updates.
     namespace cl = reefdo::gateway::cloud;
@@ -440,7 +441,6 @@ int main(int pArgc, char** pArgv)
         Show(agent.Step(app, clock, std::span<const reefdo::app::Notification>(notes.begin(), notes.size()),
                         world.cloudUp));
         ShowTrends(agent.Trends(app, clock, world.cloudUp));
-        platform.cloudState = world.cloudUp ? "online (fake)" : "offline (fake)";
         platform.cloudPushes = agent.Pushes();
         if(app.TestPersistentChanged())
         {

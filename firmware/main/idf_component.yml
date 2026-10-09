@@ -7,3 +7,6 @@ dependencies:
   esp_rmaker_neo:
     path: ../external/esp-rainmaker-neo-firmware/components/esp_rmaker_neo
   espressif/network_provisioning: "^1.0.5"
+  # The SDK's own JSON writer, held at the line it was written for: 2.0 escapes strings, which the SDK's claiming
+  # already does by hand (a double escape would break linking), and changes json_gen_str_end's return
+  espressif/json_generator: "~1.2.0"

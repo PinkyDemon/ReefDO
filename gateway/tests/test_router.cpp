@@ -194,15 +194,37 @@ TEST_CASE("Config reads redacted and writes through the platform", "[router]")
 TEST_CASE("Commands apply, switch the outputs now and pass the time on", "[router]")
 {
     Bench b;
-    const Reply ack = b.Call(Method::Post, "/api/cmd", {}, R"({"ack":true})");
-    REQUIRE(ack.body == R"({"ok":true,"message":"acknowledged"})");
+    Reply ack = b.Call(Method::Post, "/api/cmd", {}, R"({"ack":true})");
+    REQUIRE(ack.body == R"({"ok":false,"message":"nothing to acknowledge"})"); // Normal
     REQUIRE(b.platform.outputsChanged == 1);
+    b.s.tank.SetSat(55.0f);
+    b.s.RunS(120);
+    ack = b.Call(Method::Post, "/api/cmd", {}, R"({"ack":true})");
+    REQUIRE(ack.body == R"({"ok":true,"message":"acknowledged"})");
+    REQUIRE(b.platform.outputsChanged == 2);
     REQUIRE_FALSE(b.platform.unix.has_value());
     const Reply time = b.Call(Method::Post, "/api/cmd", {}, R"({"time":{"unix":1789400000,"tz":3600}})");
     REQUIRE(time.body.find("\"ok\":true") != std::string::npos);
     REQUIRE(b.platform.unix == 1789400000u);
     REQUIRE(b.platform.tz == 3600);
     REQUIRE(b.Call(Method::Post, "/api/cmd", {}, "{").body.find("\"ok\":false") != std::string::npos);
+}
+
+TEST_CASE("A test alert goes out only while the phone app is online", "[router][cloud]")
+{
+    Bench b;
+    const std::size_t commands = b.s.EventsOf(reefdo::log::Type::Command);
+    const Reply off = b.Call(Method::Post, "/api/cmd", {}, R"({"test_alert":true})");
+    REQUIRE(off.body == R"({"ok":false,"message":"the phone app is not online"})");
+    REQUIRE(b.s.EventsOf(reefdo::log::Type::Command) == commands);
+    b.platform.sys.cloud.assign("online");
+    const Reply on = b.Call(Method::Post, "/api/cmd", {}, R"({"test_alert":true})");
+    REQUIRE(on.body == R"({"ok":true,"message":"test alert: the phone should buzz within a sample period"})");
+    REQUIRE(b.s.EventsOf(reefdo::log::Type::Command) == commands + 1);
+    bool notified = false;
+    for(const reefdo::app::Notification& n : b.s.app.TakeNotifications())
+        notified = notified || n.kind == reefdo::app::NotifyKind::TestAlert;
+    REQUIRE(notified);
 }
 
 TEST_CASE("CSV routes stream series, events and the export", "[router]")
@@ -294,12 +316,18 @@ TEST_CASE("Mute and the buzzer test", "[router]")
 TEST_CASE("The cloud reads, acknowledges and suspends alerts — nothing else", "[router][cloud]")
 {
     Bench b;
+    b.s.tank.SetSat(55.0f);
+    b.s.RunS(120); // Red: something to acknowledge
     REQUIRE(b.Call(Method::Get, "/api/status", {}, {}, Who::Cloud).code == Code::Ok);
     REQUIRE(b.Call(Method::Post, "/api/cmd", {}, R"({"ack":true})", Who::Cloud).body.find("\"ok\":true") !=
             std::string::npos);
     REQUIRE(b.Call(Method::Post, "/api/cmd", {}, R"({"suspend_alerts":{"s":0}})", Who::Cloud).code == Code::Ok);
-    const char* refused[] = {R"({"maintenance":true})", R"({"ack":true,"maintenance":true})", "{", "[1]",
-                             R"({"manual":{"device":1,"on":true}})"};
+    const char* refused[] = {R"({"maintenance":true})",
+                             R"({"ack":true,"maintenance":true})",
+                             "{",
+                             "[1]",
+                             R"({"manual":{"device":1,"on":true}})",
+                             R"({"test_alert":true})"};
     for(const char* body : refused)
     {
         INFO(body);
@@ -326,4 +354,16 @@ TEST_CASE("Linking to the phone app: signed in only, the name and the code come 
     const Reply r = b.Call(Method::Post, "/api/cloud-link");
     REQUIRE(r.body == R"({"ok":true,"service":"REEFDO_1A2B","pop":"5f3c9a01","message":"open the app"})");
     REQUIRE(b.platform.links == 1);
+}
+
+TEST_CASE("A control character in a password or a network name is refused: NVS would cut the string there", "[router]")
+{
+    Bench b;
+    REQUIRE(b.Call(Method::Post, "/api/passwd", {}, "password=a%00b").body == R"({"ok":false})");
+    REQUIRE(b.Call(Method::Post, "/api/passwd", {}, "password=a%0Ab").body == R"({"ok":false})");
+    REQUIRE(b.platform.password.empty());
+    REQUIRE(b.Call(Method::Post, "/api/wifi", {}, "ssid=a%09b").body == R"({"ok":false})");
+    REQUIRE(b.Call(Method::Post, "/api/wifi", {}, "ssid=ok&pass=a%00").body == R"({"ok":false})");
+    REQUIRE(b.platform.ssid.empty());
+    REQUIRE(b.Call(Method::Post, "/api/passwd", {}, "password=a%20b").body == R"({"ok":true})"); // a space is fine
 }

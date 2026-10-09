@@ -34,15 +34,28 @@ constexpr uint32_t AGGREGATE_S = 300; // a tier-B record: one 5-minute bucket
 constexpr std::array<Param, 3> SERIES = {Param::Do, Param::Saturation, Param::Temperature};
 constexpr std::array<float, 3> SERIES_SCALE = {100.0f, 10.0f, 10.0f}; // 0.01 mg/L, 0.1 %, 0.1 °C
 
-// The events worth waking someone for: an alert that needs a person, a FAULT, a failed check, a lost plug.
-bool Pushed(const app::Notification& pN)
+bool Wanted(const config::PhoneAlerts& pA, ladder::Level pL)
+{
+    switch(pL)
+    {
+        case ladder::Level::Blue: return pA.blue;
+        case ladder::Level::Yellow: return pA.yellow;
+        case ladder::Level::Red: return pA.red;
+        default: return false;
+    }
+}
+
+// The events the phone is woken for, as configured: a level going deeper (or repeating), a FAULT, a failed check, a
+// lost plug; a test alert always. Stepping down, recovering and booting are only shown.
+bool Pushed(const app::Notification& pN, const config::PhoneAlerts& pA)
 {
     switch(pN.kind)
     {
-        case app::NotifyKind::Level: return pN.urgent;
-        case app::NotifyKind::Fault:
-        case app::NotifyKind::TestFail:
-        case app::NotifyKind::DeviceLost: return true;
+        case app::NotifyKind::Level: return (pN.deeper || pN.repeat) && Wanted(pA, pN.level);
+        case app::NotifyKind::Fault: return pA.fault;
+        case app::NotifyKind::TestFail: return pA.testFail;
+        case app::NotifyKind::DeviceLost: return pA.deviceLost;
+        case app::NotifyKind::TestAlert: return true;
         default: return false;
     }
 }
@@ -77,17 +90,23 @@ public:
 
 } // namespace
 
-Text StatusLine(const app::Status& pS)
+Text StatusLine(const app::Status& pS, bool pTestAlert)
 {
-    Text t(pS.fault ? "FAULT" : LEVELS[static_cast<int>(pS.level)]);
+    Text t(pTestAlert ? "Test alert" : "");
     char part[32];
     auto add = [&t](std::string_view pPart)
     {
+        if(t.empty())
+        {
+            t.assign(pPart);
+            return;
+        }
         char buf[Text::Capacity() + 1];
         const int n =
             std::snprintf(buf, sizeof buf, "%s · %.*s", t.c_str(), static_cast<int>(pPart.size()), pPart.data());
         t.assign(std::string_view(buf, std::min(static_cast<std::size_t>(n), Text::Capacity())));
     };
+    add(pS.fault ? "FAULT" : LEVELS[static_cast<int>(pS.level)]);
     if(pS.doMgl.has_value())
     {
         std::snprintf(part, sizeof part, "%.2f mg/L", static_cast<double>(*pS.doMgl));
@@ -175,8 +194,9 @@ TrendText Agent::Row(std::size_t pRow, const app::App& pApp, const app::Clock& p
     const ladder::Config& lc = pApp.GetConfig().ladder;
     const float bottom = lc.red.mgl - 0.5f;
     const float span = lc.blue.mgl + 2.5f - bottom;
-    // The window ends with the newest sample's block: right after a boundary the new block has none yet.
-    const int64_t newest = static_cast<int64_t>(*pClock.unixS) - pApp.GetConfig().samplePeriodS;
+    // The window ends with the newest sample's block (before any sample: a period back, the log's last bucket).
+    const int64_t newest = mNewestTs.has_value() ? static_cast<int64_t>(*mNewestTs)
+                                                 : static_cast<int64_t>(*pClock.unixS) - pApp.GetConfig().samplePeriodS;
     const int64_t last = (newest + pClock.tzOffsetS) / spec.blockS;
     char buf[TrendText::Capacity() + 1];
     std::size_t len = 0;
@@ -212,6 +232,16 @@ TrendUpdates Agent::Trends(const app::App& pApp, const app::Clock& pClock, bool 
 {
     TrendUpdates out;
     if(!pClock.unixS.has_value()) return out; // the rows are drawn in time
+    if(mTz != pClock.tzOffsetS)               // another zone moves every local-time block: lay them out again
+    {
+        if(mTz.has_value())
+        {
+            mBlocks = {};
+            mFilled = false;
+            mLiveFromTs = *pClock.unixS; // the live samples are gone with the blocks: the log fills in up to now
+        }
+        mTz = pClock.tzOffsetS;
+    }
     if(!mFilled)
     {
         // After a reboot: the 5-minute buckets of the longest window, newest first.
@@ -233,9 +263,10 @@ TrendUpdates Agent::Trends(const app::App& pApp, const app::Clock& pClock, bool 
     if(!pOnline) return out;
     for(std::size_t r = 0; r < TRENDS; ++r)
     {
-        const TrendText t = Row(r, pApp, pClock);
         const bool quietLongEnough = pClock.nowMs - mRowAtMs[r] >= static_cast<uint64_t>(TREND_MIN_S) * 1000u;
-        if(!back && (t == mRowShown[r] || !quietLongEnough)) continue;
+        if(!back && !quietLongEnough) continue; // drawn only when it could be sent
+        const TrendText t = Row(r, pApp, pClock);
+        if(!back && t == mRowShown[r]) continue;
         out.push_back(TrendUpdate{TREND_SPECS[r].param, t});
         mRowShown[r] = t;
         mRowAtMs[r] = pClock.nowMs;
@@ -254,6 +285,7 @@ Updates Agent::Step(const app::App& pApp, const app::Clock& pClock, std::span<co
     if(s.doMgl.has_value() && pClock.unixS.has_value())
     {
         if(!mLiveFromTs.has_value()) mLiveFromTs = *pClock.unixS;
+        mNewestTs = *pClock.unixS;
         Merge(pClock, *pClock.unixS, 1, *s.doMgl, *s.doMgl);
     }
     if(!pOnline) return out;
@@ -268,14 +300,21 @@ Updates Agent::Step(const app::App& pApp, const app::Clock& pClock, std::span<co
         mLevelShown = s.fault ? std::nullopt : std::optional<ladder::Level>(s.level);
     }
 
-    // Back online in a standing alarm: the push it started with may never have left the board.
-    const bool alarm = (s.fault || s.level >= ladder::Level::Yellow) && !s.silenced && !s.alertsSuspended;
+    // Back online in a standing alert the phone would have been woken for: the push it started with may never have
+    // left the board.
+    const config::PhoneAlerts& wanted = pApp.GetConfig().phone;
+    const bool heard = s.silenced && !s.autoAcked; // the day's automatic ack is nobody
+    const bool alarm = (s.fault ? wanted.fault : Wanted(wanted, s.level)) && !heard && !s.alertsSuspended;
     bool push = back && alarm;
+    bool test = false;
     for(const app::Notification& n : pNotes)
-        push |= Pushed(n);
+    {
+        push = push || Pushed(n, wanted);
+        if(n.kind == app::NotifyKind::TestAlert) test = true;
+    }
     const uint32_t key = static_cast<uint32_t>(s.level) | (s.fault ? 4u : 0u) | (s.suspect ? 8u : 0u) |
                          (s.alertsSuspended ? 16u : 0u) | (s.silenced ? 32u : 0u) | (s.maintenance ? 64u : 0u);
-    const Text status = StatusLine(s);
+    const Text status = StatusLine(s, test);
     const bool quietLongEnough = pClock.nowMs - mStatusAtMs >= static_cast<uint64_t>(STATUS_MIN_S) * 1000u;
     if(back || push || key != mStateKey || (!(status == mStatus) && quietLongEnough))
     {

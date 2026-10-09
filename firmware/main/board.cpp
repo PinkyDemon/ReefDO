@@ -14,7 +14,6 @@ namespace
 {
 
 const char* const TAG = "board";
-bool sGRelay[RELAY_COUNT] = {};
 led_strip_handle_t sGStrip = nullptr;
 bool sGBuzzer = false; // set once the LEDC channel exists
 
@@ -34,13 +33,7 @@ void InitRelaysDeenergised()
 void SetRelay(int pIndex, bool pEnergised)
 {
     if(pIndex < 0 || pIndex >= RELAY_COUNT) return;
-    sGRelay[pIndex] = pEnergised;
     gpio_set_level(RELAY_PINS[pIndex], pEnergised ? 1 : 0);
-}
-
-bool RelayEnergised(int pIndex)
-{
-    return pIndex >= 0 && pIndex < RELAY_COUNT && sGRelay[pIndex];
 }
 
 void InitBuzzer()

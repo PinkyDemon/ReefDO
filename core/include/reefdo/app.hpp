@@ -20,6 +20,8 @@ namespace reefdo::app
 constexpr uint32_t SUSPEND_MAX_S = 2 * 3600; // device maintenance: out of order at most this long per command
 constexpr uint32_t MAINTENANCE_S = 30 * 60;  // ReefDO maintenance mode ends by itself this long after it is entered
 constexpr uint32_t TUYA_LOST_AFTER = 3;      // failed transactions in a row before a plug counts as lost
+constexpr uint32_t RESTART_WINDOW_MIN = 60; // the daily restart waits up to this long after its time for a quiet sample
+constexpr uint32_t RESTART_MIN_UPTIME_S = 2 * 3600; // and never sooner after a boot: a restart cannot restart itself
 
 // A Tuya plug's link, as its task last reported it (Status::tuyaLink).
 enum class Link : uint8_t
@@ -65,7 +67,8 @@ enum class NotifyKind : uint8_t
     TestInconclusive,
     Boot,
     DeviceLost, // a Tuya plug stopped answering
-    DeviceBack
+    DeviceBack,
+    TestAlert // asked for by hand (App::TestAlert): proves the way to the phone
 };
 
 struct Notification
@@ -75,7 +78,28 @@ struct Notification
     uint8_t device = 0;
     float value = 0.0f;
     bool urgent = false;
+    bool deeper = false; // Level: the level went deeper (stepping down is informational)
     bool repeat = false; // a re-send of a standing alarm
+};
+
+// System records (log::Type::System): the board's own health, as the firmware reports it (App::LogSystem).
+enum class SystemEvent : uint8_t
+{
+    WifiLost = 1,   // f0 = seconds it had been connected, f1 = the driver's disconnect reason
+    WifiBack,       // f0 = seconds it was down (after a boot: since the boot)
+    CloudDown,      // f0 = seconds the phone app's cloud had been connected
+    CloudUp,        // f0 = seconds it was down (after a boot: since the boot)
+    Heap,           // every hour, tier A only: f0 = free KB, f1 = lowest free KB since boot, f2 = largest free block
+                    //   KB, f3 = the tightest stack margin (bytes) of the tasks that do the network work
+    WebCheckFailed, // the board could not reach its own web server: f0 = failures in a row
+    Restart         // about to restart: f0 = RestartWhy
+};
+enum class RestartWhy : uint8_t
+{
+    Command, // the console or a factory reset
+    Daily,   // config.restart
+    WebDead, // the web server stopped answering the board's own checks
+    Update   // a firmware image was written
 };
 // Collected between two TakeNotifications(): room for every plug going lost at once, plus the level and test ones.
 using Notifications = FixedVector<Notification, DEVICES + 8>;
@@ -99,7 +123,7 @@ enum MeasurementFlag : uint16_t
 //   4 out of order (| device << 8, f0 = seconds), 5 back in order (| device << 8, f1 = 0 command, 1 time ran out),
 //   6 manual on / 7 manual off / 8 back to automatic (| device << 8; 8: f1 = 0 command, 1 a schedule or trigger
 //   took over, 2 an exclusive test started), 9 plug lost (| device << 8, f0 = tuya::Error), 10 plug back,
-//   11 a failed test verdict cleared by hand (| device << 8)
+//   11 a failed test verdict cleared by hand (| device << 8), 12 a test alert to the phone app
 // Test records: aux = event type | device << 8 | outcome << 16 | skip << 24, flags = judged 1 | clock unknown 2
 //   | aborted 4 | high DO 8 (a missed response let off: f1 = DO at the device's start, f2 = the limit)
 // Ladder event records: aux = ladder::EventType, flags = from | to << 8, aux device in bits 8..15 for Pulse,
@@ -118,6 +142,7 @@ struct Status
     ladder::Level level = ladder::Level::Normal;
     bool fault = false;
     bool silenced = false;
+    bool autoAcked = false;       // silenced by the day's automatic ack only: the pushes still repeat
     bool suppressed = false;      // day_alarm suppress in effect
     bool suspect = false;         // a sudden drop: dwells extended
     bool alertsSuspended = false; // the current alert suspended (App::SuspendAlerts)
@@ -139,6 +164,7 @@ struct Status
     uint8_t testDevice = 0;
     std::array<bool, DEVICES> deviceFailed{};
     bool inconclusiveAlert = false;
+    bool restartDue = false; // this tick: the daily restart's time, and nothing a reboot would interrupt
     uint32_t nextSeq = 1;
     uint32_t uptimeS = 0;
     bool clockKnown = false;
@@ -154,8 +180,17 @@ public:
     void Start(const Clock& pClock, uint32_t pBootReason);
     void Tick(const Clock& pClock);
 
-    // Commands (from the console, the web UI, the button)
-    void Ack();
+    // Commands (from the console, the web UI, the button). Ack: false when there is nothing to acknowledge (Normal, no
+    // FAULT) — a stray press then changes and logs nothing.
+    bool Ack();
+    // A notification for its own sake, to see it arrive on the phone; logged as a Command.
+    void TestAlert(const Clock& pClock);
+    // The firmware's report of the board's health, into the log (tier A, and the events but for Heap).
+    void LogSystem(const Clock& pClock, SystemEvent pEvent, float pF0 = 0.0f, float pF1 = 0.0f, float pF2 = 0.0f,
+                   float pF3 = 0.0f);
+    // Nothing a reboot would interrupt or forget: Normal, no FAULT, no test or boost running, no maintenance, no
+    // device out of order or switched by hand. The daily restart and the firmware's own restarts wait for it.
+    bool RestartAllowed() const;
     // Alert suspend: the alert-driven devices and the alarm act as at Normal for 1..ladder::ALERT_SUSPEND_MAX_S
     // seconds; 0 resumes. Only during an alert, never in a FAULT; a deeper level, a FAULT or the alert ending
     // resumes by itself. Applied at the next tick, like Ack. pSeen: the level the person saw when they asked (a phone
@@ -218,9 +253,10 @@ private:
     void TimeSync(const Clock& pClock);
     void AlertRepeat(const Clock& pClock);
     uint32_t UptimeS(const Clock& pClock) const;
-    void Resolve(std::size_t pI, const Clock& pClock); // demands + manual + test - suspension → deviceOn, relays
-    void UpdateRelays();                               // every channel from its device (unassigned: de-energised)
-    void Expire(std::size_t pI, const Clock& pClock);  // puts a device back in order when its time is up
+    void Resolve(std::size_t pI, const Clock& pClock);       // demands + manual + test - suspension → deviceOn, relays
+    void ResolveDevice(std::size_t pI, const Clock& pClock); // the same without the relays (Tick does them once)
+    void UpdateRelays();                                     // every channel from its device (unassigned: de-energised)
+    void Expire(std::size_t pI, const Clock& pClock);        // puts a device back in order when its time is up
     void EndSuspension(std::size_t pI, const Clock& pClock, uint32_t pWhy);
     void EndMaintenance(const Clock& pClock, uint32_t pWhy); // pWhy: 0 command, 1 time ran out
     void EndManual(std::size_t pI, const Clock& pClock, uint32_t pWhy);
@@ -258,12 +294,12 @@ private:
     bool mAckPending = false;
     std::optional<uint32_t> mSuspendAlertsPending;
     bool mRunTestPending = false;
-    bool mStarted = false;
     uint64_t mBootMs = 0;
     uint32_t mNextSeq = 1;
     std::optional<uint32_t> mLastUnix;
     uint64_t mLastUnixAtMs = 0;
     std::optional<uint32_t> mCorrectionLoggedDay;
+    std::optional<uint32_t> mRestartDay; // the local day the daily restart was due (taken or not)
     uint64_t mLastAlertNotifyMs = 0;
 };
 

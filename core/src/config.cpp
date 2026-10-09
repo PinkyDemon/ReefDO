@@ -650,6 +650,20 @@ LoadResult Load(std::string_view pJson, Config& pOut, const Config& pBase)
         }
     }
     r.Number(boost, "target_mgl", "boost.target_mgl", cfg.boost.targetMgl);
+    r.Number(boost, "hold_s", "boost.hold_s", cfg.boost.holdS);
+
+    const JsonObjectConst phone = r.Object(root, "phone", "phone");
+    const JsonObjectConst alerts = r.Object(phone, "alerts", "phone.alerts");
+    r.Flag(alerts, "blue", "phone.alerts.blue", cfg.phone.blue);
+    r.Flag(alerts, "yellow", "phone.alerts.yellow", cfg.phone.yellow);
+    r.Flag(alerts, "red", "phone.alerts.red", cfg.phone.red);
+    r.Flag(alerts, "fault", "phone.alerts.fault", cfg.phone.fault);
+    r.Flag(alerts, "test_fail", "phone.alerts.test_fail", cfg.phone.testFail);
+    r.Flag(alerts, "device_lost", "phone.alerts.device_lost", cfg.phone.deviceLost);
+
+    const JsonObjectConst restart = r.Object(root, "restart", "restart");
+    r.Flag(restart, "daily", "restart.daily", cfg.restart.daily);
+    r.Hhmm(restart["time"], "restart.time", cfg.restart.minute);
 
     const JsonObjectConst signals = r.Object(root, "signals", "signals");
     r.Number(signals, "buzzer_hz", "signals.buzzer_hz", cfg.signals.buzzerHz);
@@ -697,6 +711,8 @@ LoadResult Validate(const Config& pCfg)
     if(l.recoverSustainS < 10) return Invalid("recover_sustain_s", "must be >= 10");
     if(l.nightStartMin == l.nightEndMin) return Invalid("night", "start and end must differ");
     if(l.faultConsecutiveFailures < 1) return Invalid("fault.consecutive_failures", "must be >= 1");
+    // Below a few minutes a quiet tank's identical readings would count as a frozen probe: a FAULT for nothing.
+    if(pCfg.stuckMinutes < 5 || pCfg.stuckMinutes > 1440) return Invalid("fault.stuck_minutes", "must be 5..1440");
     if(l.faultLevel < Level::Yellow) return Invalid("fault.level", "FAULT must act as yellow or red");
     if(l.pulseS < 1) return Invalid("pulse.s", "must be >= 1");
     if(pCfg.correction.scale < 0.5f || pCfg.correction.scale > 1.5f)
@@ -776,6 +792,7 @@ LoadResult Validate(const Config& pCfg)
     const SignalsConfig& sg = pCfg.signals;
     if(pCfg.boost.windowStartMin >= pCfg.boost.windowEndMin) return Invalid("boost.window", "start must be before end");
     if(pCfg.boost.targetMgl < 1.0f || pCfg.boost.targetMgl > 15.0f) return Invalid("boost.target_mgl", "must be 1..15");
+    if(pCfg.boost.holdS > 3600) return Invalid("boost.hold_s", "must be 0..3600");
 
     if(sg.buzzerHz < 200 || sg.buzzerHz > 8000) return Invalid("signals.buzzer_hz", "must be 200..8000");
     if(sg.ledBrightness > 100) return Invalid("signals.led_brightness", "must be 0..100");
@@ -887,6 +904,20 @@ std::size_t Write(const Config& pCfg, std::span<char> pOut, bool pRedact)
     FormatHhmm(pCfg.boost.windowEndMin, hhmm);
     bwindow.add(std::string_view(hhmm));
     boost["target_mgl"] = pCfg.boost.targetMgl;
+    boost["hold_s"] = pCfg.boost.holdS;
+
+    JsonObject alerts = doc["phone"]["alerts"].to<JsonObject>();
+    alerts["blue"] = pCfg.phone.blue;
+    alerts["yellow"] = pCfg.phone.yellow;
+    alerts["red"] = pCfg.phone.red;
+    alerts["fault"] = pCfg.phone.fault;
+    alerts["test_fail"] = pCfg.phone.testFail;
+    alerts["device_lost"] = pCfg.phone.deviceLost;
+
+    JsonObject restart = doc["restart"].to<JsonObject>();
+    restart["daily"] = pCfg.restart.daily;
+    FormatHhmm(pCfg.restart.minute, hhmm);
+    restart["time"] = std::string_view(hhmm);
 
     JsonObject signals = doc["signals"].to<JsonObject>();
     signals["buzzer_hz"] = pCfg.signals.buzzerHz;

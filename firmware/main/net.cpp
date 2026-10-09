@@ -1,7 +1,11 @@
 #include "net.hpp"
 
+#include <atomic>
+#include <cerrno>
 #include <cstdio>
 #include <cstring>
+
+#include <fcntl.h>
 
 #include "esp_event.h"
 #include "esp_log.h"
@@ -18,7 +22,10 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "hal/nvs_store.hpp"
+#include "lwip/sockets.h"
 #include "mdns.h"
+#include "sampler.hpp"
+#include "web.hpp"
 
 namespace net
 {
@@ -31,7 +38,11 @@ const char* const KEY_SSID = "ssid";
 const char* const KEY_PASS = "pass";
 const char* const AP_SSID = "reefdo-setup";
 const char* const HOSTNAME = "reefdo";
-constexpr uint32_t AP_AFTER_MS = 120000; // station not up for this long → raise the setup AP
+constexpr uint32_t AP_AFTER_MS = 120000;           // station not up for this long → raise the setup AP
+constexpr uint32_t WEB_CHECK_EVERY_S = 60;         // the board asks its own web server for /api/sys this often
+constexpr uint32_t WEB_CHECK_TIMEOUT_S = 5;        // and gives up on an answer after this long
+constexpr uint32_t WEB_DEAD_AFTER = 5;             // failures in a row that count as a dead web server
+constexpr uint32_t WEB_RESTART_MIN_UPTIME_S = 600; // never within the first minutes after a boot
 
 esp_netif_t* sSta = nullptr;
 esp_netif_t* sAp = nullptr;
@@ -46,10 +57,23 @@ void Update(F pChange)
     pChange(sStatus);
     taskEXIT_CRITICAL(&sLock);
 }
-bool sApStarted = false;
+bool sApStarted = false; // the setup AP is up; raised and lowered by the Watch task only (and Start / Forget)
 bool sStaConfigured = false;
-bool sPaused = false; // the phone app's provisioning owns the station: no reconnects of ours
-int64_t sLastConnectedMs = 0;
+bool sPaused = false;                     // the phone app's provisioning owns the station: no reconnects of ours
+std::atomic<int64_t> sLastConnectedMs{0}; // written on the event, web and cloud tasks, read by Watch
+std::atomic<int64_t> sLinkSinceMs{0};     // when the station last came up or went down, for the log
+uint32_t sWebFails = 0;                   // failed self-checks of the web server in a row (Watch only)
+TaskHandle_t sWatch = nullptr;
+
+int64_t NowMs()
+{
+    return esp_timer_get_time() / 1000;
+}
+
+float SinceS(int64_t pMs)
+{
+    return static_cast<float>(NowMs() - pMs) / 1000.0f;
+}
 
 void StartAp()
 {
@@ -95,7 +119,7 @@ bool ConfigureSta()
     return true;
 }
 
-void OnWifi(void*, esp_event_base_t, int32_t pId, void*)
+void OnWifi(void*, esp_event_base_t, int32_t pId, void* pData)
 {
     switch(pId)
     {
@@ -103,6 +127,15 @@ void OnWifi(void*, esp_event_base_t, int32_t pId, void*)
             if(sStaConfigured && !sPaused) esp_wifi_connect();
             break;
         case WIFI_EVENT_STA_DISCONNECTED:
+        {
+            // Every failed reconnect attempt comes here too: only the loss of a working link goes into the log.
+            if(GetStatus().connected)
+            {
+                const uint8_t reason = static_cast<const wifi_event_sta_disconnected_t*>(pData)->reason;
+                sampler::ReportSystem(reefdo::app::SystemEvent::WifiLost, SinceS(sLinkSinceMs), reason);
+                sLinkSinceMs = NowMs();
+                ESP_LOGW(TAG, "Wi-Fi lost (reason %u)", reason);
+            }
             Update(
                 [](Status& pS)
                 {
@@ -111,6 +144,7 @@ void OnWifi(void*, esp_event_base_t, int32_t pId, void*)
                 });
             if(sStaConfigured && !sPaused) esp_wifi_connect();
             break;
+        }
         default: break;
     }
 }
@@ -127,9 +161,82 @@ void OnIp(void*, esp_event_base_t, int32_t pId, void* pData)
             pS.ip.assign(ip);
             pS.connected = true;
         });
-    sLastConnectedMs = esp_timer_get_time() / 1000;
-    ESP_LOGI(TAG, "connected: %s", ip);
-    StopAp();
+    sLastConnectedMs = NowMs();
+    sampler::ReportSystem(reefdo::app::SystemEvent::WifiBack, SinceS(sLinkSinceMs));
+    sLinkSinceMs = NowMs();
+    ESP_LOGI(TAG, "connected: %s", ip); // the Watch task lowers the setup AP, if it was up
+}
+
+// connect() with a deadline of its own: lwIP's blocking one retries the SYN for minutes against a listener whose
+// backlog is full, which is just the state a wedged web server is in.
+bool ConnectWithin(int pFd, const sockaddr_in& pTo, uint32_t pSeconds)
+{
+    const int flags = fcntl(pFd, F_GETFL, 0);
+    fcntl(pFd, F_SETFL, flags | O_NONBLOCK);
+    bool ok = connect(pFd, reinterpret_cast<const sockaddr*>(&pTo), sizeof pTo) == 0;
+    if(!ok && errno == EINPROGRESS)
+    {
+        fd_set w;
+        FD_ZERO(&w);
+        FD_SET(pFd, &w);
+        timeval tv{};
+        tv.tv_sec = pSeconds;
+        int err = 0;
+        socklen_t len = sizeof err;
+        ok = select(pFd + 1, nullptr, &w, nullptr, &tv) > 0 && getsockopt(pFd, SOL_SOCKET, SO_ERROR, &err, &len) == 0 &&
+             err == 0;
+    }
+    fcntl(pFd, F_SETFL, flags);
+    return ok;
+}
+
+// GET /api/sys from the board's own address, as a browser would: true when the web server answers 200 in time.
+// The httpd thread is single: a dead one answers nobody, and nothing but a restart revives it.
+bool WebAnswers(const Status& pS)
+{
+    const int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if(fd < 0) return false; // no socket left: as dead for a browser
+    timeval tv{};
+    tv.tv_sec = WEB_CHECK_TIMEOUT_S;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+    sockaddr_in to{};
+    to.sin_family = AF_INET;
+    to.sin_port = htons(80);
+    to.sin_addr.s_addr = inet_addr(pS.ip.c_str());
+    static const char REQUEST[] = "GET /api/sys HTTP/1.0\r\nHost: reefdo\r\nConnection: close\r\n\r\n";
+    char answer[16] = {};
+    const bool ok = ConnectWithin(fd, to, WEB_CHECK_TIMEOUT_S) &&
+                    send(fd, REQUEST, sizeof REQUEST - 1, 0) == static_cast<int>(sizeof REQUEST - 1) &&
+                    recv(fd, answer, sizeof answer - 1, 0) >= 12 && std::memcmp(answer, "HTTP/1.1 200", 12) == 0;
+    close(fd);
+    return ok;
+}
+
+// A web server that has stopped answering for WEB_DEAD_AFTER checks is logged each time and, once the App has
+// nothing a reboot would interrupt, cured the only way there is. One busy with a long request is not dead.
+void CheckWeb(const Status& pS)
+{
+    if(WebAnswers(pS))
+    {
+        sWebFails = 0;
+        return;
+    }
+    if(web::Busy())
+    {
+        ESP_LOGW(TAG, "the web server did not answer the check, but it is busy with a request");
+        return;
+    }
+    ++sWebFails;
+    ESP_LOGE(TAG, "the web server did not answer (%lu in a row)", static_cast<unsigned long>(sWebFails));
+    sampler::ReportSystem(reefdo::app::SystemEvent::WebCheckFailed, static_cast<float>(sWebFails));
+    if(sWebFails < WEB_DEAD_AFTER || NowMs() < static_cast<int64_t>(WEB_RESTART_MIN_UPTIME_S) * 1000) return;
+    bool allowed = false;
+    {
+        sampler::Guard guard;
+        allowed = sampler::App().RestartAllowed();
+    }
+    if(allowed) sampler::Restart(reefdo::app::RestartWhy::WebDead);
 }
 
 void OnTimeSync(timeval*)
@@ -138,17 +245,23 @@ void OnTimeSync(timeval*)
     ESP_LOGI(TAG, "clock set by SNTP");
 }
 
-// Raises the setup AP when the station has been down long enough; keeps RSSI fresh.
+// Raises the setup AP when the station has been down long enough and lowers it once it is up (one task owns the
+// mode, so a connection arriving mid-decision cannot leave an open AP behind); keeps RSSI fresh; checks the web
+// server once a minute while the station is up.
 void Watch(void*)
 {
+    uint32_t seconds = 0;
     for(;;)
     {
         vTaskDelay(pdMS_TO_TICKS(1000));
-        const int64_t now = esp_timer_get_time() / 1000;
-        const bool connected = GetStatus().connected;
-        if(!connected && !sPaused && now - sLastConnectedMs > AP_AFTER_MS) StartAp();
+        const Status s = GetStatus();
+        if(s.connected)
+            StopAp();
+        else if(!sPaused && NowMs() - sLastConnectedMs > AP_AFTER_MS)
+            StartAp();
         wifi_ap_record_t ap = {};
-        if(connected && esp_wifi_sta_get_ap_info(&ap) == ESP_OK) Update([&ap](Status& pS) { pS.rssi = ap.rssi; });
+        if(s.connected && esp_wifi_sta_get_ap_info(&ap) == ESP_OK) Update([&ap](Status& pS) { pS.rssi = ap.rssi; });
+        if(++seconds % WEB_CHECK_EVERY_S == 0 && s.connected && !sPaused) CheckWeb(s);
     }
 }
 
@@ -230,7 +343,12 @@ void Start()
     sntp.sync_cb = &OnTimeSync;
     ESP_ERROR_CHECK(esp_netif_sntp_init(&sntp));
 
-    xTaskCreatePinnedToCore(Watch, "net", 4096, nullptr, 2, nullptr, 0);
+    xTaskCreatePinnedToCore(Watch, "net", 4096 + 1024, nullptr, 2, &sWatch, 0); // + the web check's socket work
+}
+
+uint32_t StackLeft()
+{
+    return sWatch != nullptr ? static_cast<uint32_t>(uxTaskGetStackHighWaterMark(sWatch)) : UINT32_MAX;
 }
 
 Status GetStatus()
@@ -244,13 +362,14 @@ Status GetStatus()
 bool SetCredentials(std::string_view pSsid, std::string_view pPassword)
 {
     if(pSsid.empty() || pSsid.size() > 32 || pPassword.size() > 64) return false;
+    if(sPaused) return false; // the phone app's link window drives the station: not now
     if(!hal::nvs::SetStr(KEY_SSID, pSsid) || !hal::nvs::SetStr(KEY_PASS, pPassword)) return false;
 #if CONFIG_REEFDO_QEMU
     return true; // stored for a board; QEMU has no Wi-Fi
 #endif
     esp_wifi_disconnect();
     if(ConfigureSta()) esp_wifi_connect();
-    sLastConnectedMs = esp_timer_get_time() / 1000; // give the new network its two minutes before the AP
+    sLastConnectedMs = NowMs(); // give the new network its two minutes before the AP
     return true;
 }
 
@@ -271,11 +390,6 @@ bool HasCredentials()
 {
     return sStaConfigured;
 }
-
-} // namespace net
-
-namespace net
-{
 
 bool RememberCredentials(std::string_view pSsid, std::string_view pPassword)
 {
@@ -301,7 +415,7 @@ void ResumeStation(bool pJoined)
     esp_wifi_set_storage(WIFI_STORAGE_RAM);
     sApStarted = false;
     Update([](Status& pS) { pS.apActive = false; });
-    sLastConnectedMs = esp_timer_get_time() / 1000; // two more minutes before the setup AP
+    sLastConnectedMs = NowMs(); // two more minutes before the setup AP
     if(!pJoined && ConfigureSta()) esp_wifi_connect();
 #else
     static_cast<void>(pJoined);

@@ -32,8 +32,9 @@ struct Test
     uint32_t hz = 2400;
     uint32_t untilMs = 0;
 };
-Test sTest;
-uint32_t sNowMs = 0; // the indicator clock, for scheduling a test
+Test sTest;                                            // written by the console / web tasks, read by ours
+portMUX_TYPE sTestLock = portMUX_INITIALIZER_UNLOCKED; // so a test never plays one task's pattern at another's volume
+uint32_t sNowMs = 0;                                   // the indicator clock, for scheduling a test
 
 struct Rgb
 {
@@ -127,8 +128,7 @@ void Task(void*)
             if(!longFired)
             {
                 sampler::Guard guard;
-                sampler::App().Ack();
-                ESP_LOGI(TAG, "button: ack");
+                ESP_LOGI(TAG, "button: %s", sampler::App().Ack() ? "ack" : "nothing to acknowledge");
                 chirpUntil = tMs + 120;
             }
             pressedMs = 0;
@@ -155,11 +155,14 @@ void Task(void*)
             volume = 1;
         }
         if(sMuted) on = false;
-        if(tMs < sTest.untilMs) // an explicit test plays through the mute
+        taskENTER_CRITICAL(&sTestLock);
+        const Test test = sTest;
+        taskEXIT_CRITICAL(&sTestLock);
+        if(tMs < test.untilMs) // an explicit test plays through the mute
         {
-            on = BuzzerOn(sTest.pattern, tMs);
-            hz = sTest.hz;
-            volume = sTest.volume;
+            on = BuzzerOn(test.pattern, tMs);
+            hz = test.hz;
+            volume = test.volume;
         }
         if(on || sounding) board::BuzzerSet(on, hz, volume);
         sounding = on;
@@ -207,10 +210,14 @@ bool ParseBuzzerPattern(const char* pName, reefdo::config::BuzzerPattern& pOut)
 
 void TestBuzzer(reefdo::config::BuzzerPattern pPattern, uint32_t pVolume, uint32_t pHz, uint32_t pSeconds)
 {
-    sTest.pattern = pPattern;
-    sTest.volume = pVolume > 3 ? 3 : pVolume;
-    sTest.hz = pHz < 200 ? 200 : pHz > 8000 ? 8000 : pHz;
-    sTest.untilMs = sNowMs + (pSeconds > 30 ? 30 : pSeconds) * 1000;
+    Test t;
+    t.pattern = pPattern;
+    t.volume = pVolume > 3 ? 3 : pVolume;
+    t.hz = pHz < 200 ? 200 : pHz > 8000 ? 8000 : pHz;
+    t.untilMs = sNowMs + (pSeconds > 30 ? 30 : pSeconds) * 1000;
+    taskENTER_CRITICAL(&sTestLock);
+    sTest = t;
+    taskEXIT_CRITICAL(&sTestLock);
 }
 
 } // namespace indicator

@@ -57,7 +57,7 @@ reefdo::app::Clock ClockNow();
 Indication GetIndication();
 
 ProbeSource GetProbeSource();
-void SetProbeSource(ProbeSource pSrc); // persisted; effective after reboot
+bool SetProbeSource(ProbeSource pSrc); // persisted; effective after reboot; false when NVS refused
 reefdo::sim::Tank* Tank();             // the virtual tank when the source is Sim, else nullptr
 hal::Rs485Uart& Uart();
 
@@ -73,5 +73,10 @@ const char* ConfigState(); // "stored", "defaults", or "rejected at <path>: <mes
 void ApplyRelays(); // after a command that changes device states (manual, suspend): do not wait for the next sample
 
 void Hang(); // stop feeding the task watchdog: proves the panic → reboot → relays-off path
+
+// The board's health into the log (App::LogSystem), from any task: queued, written by the sampler under its lock.
+void ReportSystem(reefdo::app::SystemEvent pEvent, float pF0 = 0.0f, float pF1 = 0.0f, float pF2 = 0.0f);
+// Logs why, gives the record and any answer on the wire a second, restarts. Does not return.
+void Restart(reefdo::app::RestartWhy pWhy);
 
 } // namespace sampler

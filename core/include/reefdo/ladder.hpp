@@ -140,6 +140,7 @@ struct Output
     Level level = Level::Normal;  // what the readings support; frozen while the probe fails
     bool fault = false;           // the probe failed: fault.level's devices run (if deeper), fault signal
     bool silenced = false;        // Ack in effect
+    bool autoAcked = false;       // ...the day's automatic one: nobody has acknowledged anything (pushes go on)
     bool suppressed = false;      // day_alarm suppress in effect
     bool suspect = false;         // a sudden drop: dwells extended
     bool alertsSuspended = false; // alert-driven devices and the alarm as at Normal; the level stays real
@@ -165,6 +166,7 @@ struct State
     std::array<std::optional<uint64_t>, 3> belowSinceMs{}; // [Blue-1, Yellow-1, Red-1]
     std::optional<uint64_t> aboveSinceMs;
     std::optional<uint64_t> ackUntilMs;
+    bool ackByHand = false;                  // the ack in effect was pressed, not the day's automatic one
     std::optional<uint64_t> soundingSinceMs; // day auto_ack: the unacknowledged alarm sounds since
     std::optional<uint64_t> alertsSuspendedUntilMs;
     bool suspect = false;

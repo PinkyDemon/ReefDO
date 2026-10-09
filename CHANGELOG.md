@@ -1,5 +1,36 @@
 ## Version History
 
+### Changes in v1.1.0-rc5
+
+* Added a choice of what wakes the phone (Config → Phone app alerts, `phone.alerts`): Blue, Yellow, Red, FAULT, a failed check, a lost plug, each on or off. By default Yellow and Red (and their repeats), FAULT, a failed check and a lost plug push, Blue stays at the tank, as before
+* Added a test alert (Setup → Phone app → Test alert, `cloud test`, `{"test_alert":true}`): one push now, the app's status reads "Test alert · …" for a minute. Refused while the phone app is not online. Logged
+* Added a hold time to the boost (`boost.hold_s`, default 300 s): the boost stops once DO has stayed at or above the target for that long, not at the first reading that touches it. A pump's first bubbles lift the reading at the probe long before the tank follows; a dip below the target starts the hold over. 0 restores the old behaviour
+* Added System records to the log and the Events page: Wi-Fi lost (with the driver's reason) and back, the phone app's cloud down and up, each with how long the previous state lasted; the web server failing the board's own check; every restart with its reason; and once an hour the free heap, its low-water mark and the largest free block (export only). The Boot record names its reason. The System card shows the heap
+* Added a check of the board's own web server: once a minute it asks itself for /api/sys; after 5 misses in a row (logged) it restarts, once nothing a reboot would interrupt is running (Normal, no FAULT, no test, boost or maintenance, no device out of order or switched by hand)
+* Added an optional daily restart (`restart.daily`, `restart.time`, Config → Daily restart; off by default): the first quiet sample within the hour after the time, once a day, never within two hours of a boot. Logged
+* Changed Acknowledge to do nothing when there is nothing to acknowledge (Normal, no FAULT): the page, the console, the button and the phone app get "nothing to acknowledge" instead of a logged Ack. The app's Acknowledge control fires on an accidental tap while scrolling, which used to leave an Ack in the log
+* Changed the console's `reboot`, `factory yes` and `cloud forget yes` and the OTA reboot to log their restart first
+* Updated the ESP RainMaker Neo firmware SDK to its 2026-10-07 state: fixes for a double free when a publish fails during a reconnect, a time-series entry leaking after a failed publish, a lost subscription (the phone's writes) after a failed resubscribe, and a FreeRTOS timer used after its delete in the reconnect backoff. ReefDO's two patches still apply. The SDK's JSON writer is held at 1.2 (2.0 changes its behaviour under the SDK)
+* Fixed the web server dying while everything else ran on: the server's own sockets plus its seven clients used up every socket the network stack has, and a phone or laptop that left without closing kept its slot for ever, so new connections were dropped at the door. The stack has 16 sockets now, the server takes six clients, probes idle ones and closes the dead, and a refused upload closes its socket instead of swallowing the rest of it
+* Fixed the day's automatic acknowledgement (`night.day_alarm`: `auto_ack`) also stopping the phone's repeat pushes, as if someone had acknowledged: the pushes repeat until a person does, as documented
+* Fixed an acknowledgement pressed in the very sample the alarm went deeper (or a FAULT began) silencing the new alarm: it is dropped, the new alarm sounds and pushes
+* Fixed the boost giving the day up on a single missed probe reading (a CRC error) as if the window had closed: a running boost rides a gap out, and the hold waits for the next reading
+* Fixed `fault.stuck_minutes` accepting any value: 0 called every reading frozen and raised a FAULT with a healthy probe; it must be 5..1440 now
+* Fixed the evening test logging a "skipped" record every sample instead of once a day when the board has no clock and the tank is in an alert at the time of the attempt; and a board with no device to test no longer logs a daily skipped test
+* Fixed the ladder stepping down on the readings from before a probe outage: after an outage the recovery timer and the median filters start over with the new readings
+* Fixed the export, the events and the chart series skipping a whole flash segment of rows when the log ring rotated during a download to a slow client
+* Fixed the trend rows going blank for up to a day after a time-zone change (DST): they are laid out again from the log
+* Fixed the daily summary counting the events of a day without a reading (a dead probe) into the next day's record; the temperature shown while the probe is out
+* Fixed the page: a browser in another time zone silently changed the board's clock and zone when signed in (it only says so now; the clock is set from a browser only while the board's is unknown); a failed load of the output types made Save turn every device's output into "none"; a password with a character outside Latin-1 locked the browser out; device names were put into the page unescaped; a non-numeric entry saved the old value and an emptied field saved 0; the device test's "back to automatic" could fail silently; "since last export" moved before the download had succeeded; a board that stopped answering kept looking healthy; the Config tab discarded unsaved edits on every visit; the OTA progress bar showed nothing between 30 and 100 %
+* Changed the chart's tier-B and tier-A series to find their start by search instead of scanning the whole ring under the sampler's lock (a 5-minute ring of months is read every 30 seconds while the chart is open)
+* Changed the console's `export` and `events` to stream with the App unlocked: a long dump over the USB console could hold the sampler past its watchdog
+* Changed the restart after a dead web server to leave a core dump (a panic, not a clean reset), so the next one explains itself; the LED task no longer competes for the sampler's lock twenty times a second
+
+Upgrade notes:
+
+* Settings, logs and test history carry over; the boost keeps running for the hold time (5 min) after reaching its target now — set `hold_s` to 0 on the Config page for the old behaviour
+* The daily restart is off until switched on
+
 ### Changes in v1.1.0-rc4
 
 * Added the phone app: ReefDO reports to the ESP RainMaker Home app (Android, iOS) through Espressif's RainMaker Neo cloud. The app shows DO, saturation and temperature as 5-minute medians, the level and a status line, receives the pushes, and can acknowledge or suspend an alert, nothing else. Configuration and maintenance stay on the page. The board never depends on it: not linked, offline or with the cloud down, everything works as before

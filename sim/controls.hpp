@@ -25,6 +25,7 @@ struct World
     float dropPerS = 0.0f;                             // ...at this rate (% per second)
     float dropAt = 0.0f;                               // where the fall has got to
     bool cloudUp = true;                               // the fake cloud link
+    uint64_t cloudSinceMs = 0;                         // when it last came up or went down (the System record)
     std::string cloudView{};                           // what the phone app would show now
     std::function<std::string(int, int)> cloudWrite{}; // a write from the phone app: (cloud::Param, value)
     bool quit = false;

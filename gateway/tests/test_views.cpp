@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -177,7 +178,21 @@ TEST_CASE("apply_command: every command and every refusal", "[api]")
     REQUIRE_FALSE(ApplyCommand(s.app, R"({"dance":true})", s.clock).ok);
     REQUIRE_FALSE(ApplyCommand(s.app, R"({"ack":false})", s.clock).ok);
 
-    REQUIRE(ApplyCommand(s.app, R"({"ack":true})", s.clock).ok);
+    Command ack = ApplyCommand(s.app, R"({"ack":true})", s.clock);
+    REQUIRE_FALSE(ack.ok); // Normal: nothing to acknowledge
+    REQUIRE(std::string(ack.message) == "nothing to acknowledge");
+    s.tank.SetSat(55.0f);
+    s.RunS(120);
+    ack = ApplyCommand(s.app, R"({"ack":true})", s.clock);
+    REQUIRE(ack.ok);
+    REQUIRE(std::string(ack.message) == "acknowledged");
+    s.tank.SetSat(104.0f);
+    s.RunS(40 * 60); // back at Normal for the rest
+    REQUIRE(s.app.GetStatus().level == Level::Normal);
+    const Command alert = ApplyCommand(s.app, R"({"test_alert":true})", s.clock);
+    REQUIRE(alert.ok);
+    REQUIRE(alert.testAlert); // the router sends it once it knows the phone app is online
+    REQUIRE_FALSE(ApplyCommand(s.app, R"({"test_alert":false})", s.clock).ok);
     REQUIRE(ApplyCommand(s.app, R"({"test":"run"})", s.clock).ok);
     REQUIRE_FALSE(ApplyCommand(s.app, R"({"test":"walk"})", s.clock).ok);
     s.Tick();
@@ -547,4 +562,114 @@ TEST_CASE("apply_command: suspend_alerts carries the level the asker saw", "[api
     REQUIRE(ApplyCommand(s.app, R"({"suspend_alerts":{"s":600,"level":"red"}})", s.clock).ok);
     s.Tick();
     REQUIRE(s.app.GetStatus().alertsSuspended);
+}
+
+namespace
+{
+
+// A client slow enough for the sampler to get a sample in (the board unlocks the App per chunk): the ring may
+// rotate under the stream. pTicksAt: the write at which it does, pTicks: how many samples arrive then.
+struct TickingSink : ISink
+{
+    Scenario& s;
+    std::size_t ticksAt;
+    std::size_t ticks;
+    std::size_t writes = 0;
+    std::string out;
+    TickingSink(Scenario& pS, std::size_t pTicksAt, std::size_t pTicks)
+        : s(pS)
+        , ticksAt(pTicksAt)
+        , ticks(pTicks)
+    {
+    }
+    bool Write(std::string_view pChunk) override
+    {
+        out.append(pChunk);
+        if(++writes == ticksAt)
+            for(std::size_t i = 0; i < ticks; ++i)
+                s.Tick();
+        return true;
+    }
+};
+
+// The first column of every data row.
+std::vector<uint32_t> FirstColumn(const std::string& pCsv)
+{
+    std::vector<uint32_t> out;
+    std::size_t at = pCsv.find('\n') + 1; // past the header
+    while(at < pCsv.size())
+    {
+        out.push_back(static_cast<uint32_t>(std::strtoul(pCsv.c_str() + at, nullptr, 10)));
+        at = pCsv.find('\n', at) + 1;
+    }
+    return out;
+}
+
+} // namespace
+
+TEST_CASE("A ring that rotates under the export skips nothing that is still on flash", "[api]")
+{
+    Scenario s;
+    s.Start();
+    const std::size_t capacity = s.app.LogA().Capacity();
+    while(s.app.LogA().Count() != capacity) // exactly full: the next record drops the oldest segment
+        s.Tick();
+    TickingSink sink(s, 100, 1); // the reader is past the first segment when it goes
+    const std::size_t n = ExportCsv(s.app, 0, sink);
+    const std::vector<uint32_t> seqs = FirstColumn(sink.out);
+    REQUIRE(seqs.size() == n);
+    REQUIRE(n > capacity - 100);
+    for(std::size_t i = 1; i < seqs.size(); ++i)
+        REQUIRE(seqs[i] == seqs[i - 1] + 1);
+    REQUIRE(seqs.back() == s.app.LogA().last()->seq);
+
+    // The same for the measurement series (by time) ...
+    while(s.app.LogA().Count() != capacity)
+        s.Tick();
+    TickingSink series(s, 100, 1);
+    SeriesCsv(s.app, 'A', 1, *s.clock.unixS + 100, 1, series);
+    const std::vector<uint32_t> ts = FirstColumn(series.out);
+    REQUIRE(ts.size() > capacity - 200);
+    for(std::size_t i = 1; i < ts.size(); ++i)
+        REQUIRE(ts[i] == ts[i - 1] + TICK_S);
+
+    // ... and the 5-minute aggregates, whose ring takes a record only at a bucket boundary.
+    const std::size_t aggregates = s.app.LogB().Capacity();
+    while(s.app.LogB().Count() != aggregates)
+        s.Tick();
+    TickingSink buckets(s, 150, 31); // 31 samples: one bucket boundary, one aggregate, one segment dropped
+    SeriesCsv(s.app, 'B', 1, *s.clock.unixS + 1000, 1, buckets);
+    const std::vector<uint32_t> bts = FirstColumn(buckets.out);
+    REQUIRE(bts.size() > aggregates - 150);
+    for(std::size_t i = 1; i < bts.size(); ++i)
+        REQUIRE(bts[i] == bts[i - 1] + 300);
+}
+
+TEST_CASE("The series' start is found by search, clock-less stretches and unreadable flash included", "[api]")
+{
+    Scenario s; // 600 s with a clock, 1200 s without, 600 s with: the blind block sits where a search lands
+    s.Start();
+    s.RunS(600);
+    const uint32_t firstGapTs = *s.clock.unixS;
+    s.clockKnown = false;
+    s.RunS(1200);
+    s.clockKnown = true;
+    const uint32_t lastStretch = *s.clock.unixS;
+    s.RunS(600);
+    const uint32_t now = *s.clock.unixS;
+    StringSink last;
+    REQUIRE(SeriesCsv(s.app, 'A', lastStretch, now, 1, last) == 60);
+    StringSink inGap;
+    REQUIRE(SeriesCsv(s.app, 'A', firstGapTs + 300, now, 1, inGap) == 60); // from inside the blind time
+    StringSink all;
+    REQUIRE(SeriesCsv(s.app, 'A', 1, now, 1, all) == 120); // the blind records are not in a timed window
+    StringSink none;
+    REQUIRE(SeriesCsv(s.app, 'A', now + 1, now + 100, 1, none) == 0);
+
+    s.a.failRead = true;
+    s.b.failRead = true;
+    StringSink deadA;
+    REQUIRE(SeriesCsv(s.app, 'A', now - 600, now, 1, deadA) == 0);
+    StringSink deadB;
+    REQUIRE(SeriesCsv(s.app, 'B', now - 3600, now, 1, deadB) == 0);
 }
